@@ -108,7 +108,7 @@ Example2 to remove empty lines after AI answer:
 
 (defun my/ai-postprocess (type content)
   (if (equal type 'end)
-      (let* ((context (org-ai-special-block))
+      (let* ((context (org-ai-block-p))
              (con-beg (org-element-property :contents-begin context))
              (con-end (org-element-property :contents-end context)))
         (org-ai-remove-distant-empty-lines con-beg con-end))))
@@ -120,7 +120,7 @@ Example2 to remove empty lines after AI answer:
 Note: text this text located between org-ai--current-insert-position-marker (point-marker) in current buffer.
 
 ** org-block functions
-- org-in-src-block-p = org-ai-special-block
+- org-in-src-block-p = org-ai-block-p
 * Tests
 #+begin_ai :max-tokens 150 :service together :model "meta-llama/Llama-3.3-70B-Instruct-Turbo-Free"
 How to live long?

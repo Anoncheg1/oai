@@ -50,8 +50,9 @@
   `(cl-letf (((symbol-function #'org-element--cache-active-p) (lambda (&rest _) nil)))
      ,@body))
 
-(defun org-ai-special-block ()
-  "Are we inside a #+begin_ai...#+end_ai block?"
+(defun org-ai-block-p ()
+  "Are we inside a #+begin_ai...#+end_ai block?
+Like `org-in-src-block-p'."
   (org-ai--org-element-with-disabled-cache ;; with cache enabled we get weird Cached element is incorrect warnings
     (cl-loop with context = (org-element-context)
              while (and context
@@ -65,7 +66,7 @@
 `ELEMENT' is the element of the special block. Return an alist of
 key-value pairs.
 Like org-babel-get-src-block-info."
-  (let* ((element (or element (org-ai-special-block)))
+  (let* ((element (or element (org-ai-block-p)))
          (header-start (org-element-property :post-affiliated element))
          (header-end (or (org-element-property :contents-begin element)
                          (point-at-eol))) ; fix for empty block
@@ -90,7 +91,7 @@ ignoring case."
 Will expand noweb templates if an 'org-ai-noweb' property or
 'noweb' header arg is \"yes\""
 
-  (let* ((element (or element (org-ai-special-block)))
+  (let* ((element (or element (org-ai-block-p)))
          (content-start (org-element-property :contents-begin element))
          (content-end (org-element-property :contents-end element))
          (unexpanded-content (string-trim (buffer-substring-no-properties content-start content-end)))
@@ -126,28 +127,6 @@ If exist return nil or string, if not exist  return `default'."
       ;; else - nil or string
       sys-raw)))
 
-;; (defmacro org-ai-block--let-params (info definitions &rest body)
-;;   "A specialized `let*' macro for Org-AI parameters.
-;; DEFINITIONS is a list of (VARIABLE &optional DEFAULT-FORM &key TYPE).
-;; TYPE can be 'number or 'identity.
-;; Parameters are sourced from:
-;; 1. From Org-AI block header `info' alist. (e.g., :model \"gpt-4\")
-;; 2. Org inherited property. (e.g., #+PROPERTY: model gpt-4)
-;; 3. DEFAULT-FORM."
-;;   `(let* ,(cl-loop for (sym default-form &key type) in definitions
-;;                    collect
-;;                    `(,sym (or ,sym
-;;                               (alist-get ,(intern (format ":%s" (symbol-name sym))) info)
-;;                               ,(cond
-;;                                ((string= (symbol-name sym) "model") ; Special: no conversion for model
-;;                                 `(org-entry-get-with-inheritance ,(symbol-name sym)))
-;;                                ((eq type 'number)
-;;                                 `(when-let ((prop (org-entry-get-with-inheritance ,(symbol-name sym))))
-;;                                    (if (stringp prop) (string-to-number prop) prop)))
-;;                                (t ; Default: identity conversion
-;;                                 `(org-entry-get-with-inheritance ,(symbol-name sym))))
-;;                               ,@(when default-form `(,default-form)))))
-;;      ,@body))
 (defmacro org-ai-block--let-params (info definitions &rest body)
   "A specialized `let*' macro for Org-AI parameters.
 DEFINITIONS is a list of (VARIABLE &optional DEFAULT-FORM &key TYPE).
@@ -185,7 +164,7 @@ Parameters are sourced from:
 
 (defun org-ai--chat-role-regions ()
   "Splits the special block by role prompts."
-  (if-let* ((element (org-ai-special-block))
+  (if-let* ((element (org-ai-block-p))
             (content-start (org-element-property :contents-begin element))
             (content-end (org-element-property :contents-end element)))
       (let ((result (save-match-data

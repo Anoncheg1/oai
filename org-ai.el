@@ -117,7 +117,7 @@ TODO: pass callback for writing "
 ;; -= C-c C-c
 (defun org-ai-ctrl-c-ctrl-c ()
   "Main command for #+begin_ai."
-  (when-let ((element (org-ai-special-block))) ; org-ai-block.el
+  (when-let ((element (org-ai-block-p))) ; org-ai-block.el
     (org-ai-interface-step1) ; here
     t))
 
@@ -127,7 +127,7 @@ TODO: pass callback for writing "
 Read Org parameters and send the text content to next step."
   (interactive)
   ;; -- 1) Org "Pre-parsing"
-  (let* ((element (org-ai-special-block)) ; org-ai-block.el
+  (let* ((element (org-ai-block-p)) ; org-ai-block.el
          (info (org-ai-get-block-info element)) ; ((:max-tokens . 150) (:service . "together") (:model . "xxx")) ; org-ai-block.el
          (end-marker (org-ai-block--get-contents-end-marker element))
          (req-type (org-ai--get-request-type info)) ; org-ai-block.el
@@ -189,7 +189,7 @@ Read Org parameters and send the text content to next step."
 This is what will be sent to the api.  ELEMENT is the org-ai block.
 Like `org-babel-expand-src-block'."
   (interactive)
-  (let* ((element (or element (org-ai-special-block))) ; org-ai-block.el
+  (let* ((element (or element (org-ai-block-p))) ; org-ai-block.el
          (expanded (org-ai-get-block-content element))) ; org-ai-block.el
     (if (called-interactively-p 'any)
         (let ((buf (get-buffer-create "*Org-Ai Preview*")))

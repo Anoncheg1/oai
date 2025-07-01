@@ -47,7 +47,6 @@
 ;; Interface function: "org-ai-stream-completion".
 ;;
 ;; (org-ai-stream-completion service|model messages|prompt context)
-;; context - org-ai-special-block ?????
 ;; -> (org-ai-stream-request service messages|prompt callback)
 ;; -> org-ai--get-headers, org-ai--get-endpoint, org-ai--payload, url-retrieve
 ;; - org-ai--get-headers = org-ai-openai-api-token = "api-key" or "x-api-key" or "Authorization"
@@ -69,8 +68,7 @@
 (require 'gv)
 (require 'json)
 
-(require 'org-ai-block)
-
+;; (require 'org-ai-block)
 
 ;;; - Constants
 (defcustom org-ai-jump-to-end-of-block t
@@ -538,9 +536,6 @@ Called from `org-ai-complete-block' in main file with query string in `PROMPT' o
 `STREAM' string - as bool, indicates whether to stream the response."
   ;; - Step 1) get Org properties or block parameters
   (let* (
-         ;; (context (or context (org-ai-special-block)))
-         ;; (content (org-ai-get-block-content context)) ; org-ai-block.el
-         ;; (buffer (current-buffer))
          (messages (unless (eql req-type 'completion)
                      (org-ai--collect-chat-messages content
                                                     sys-prompt
@@ -550,7 +545,9 @@ Called from `org-ai-complete-block' in main file with query string in `PROMPT' o
                     (messages
                           (lambda (result) (org-ai--insert-stream-response end-marker result t)))
                     ;; - completion
-                    (t (lambda (result) (org-ai--insert-single-response end-marker result))))))
+                    (t (lambda (result) (org-ai--insert-single-response end-marker
+                                                                        (org-ai--get-single-response-text result)
+                                                                        nil))))))
     ;; - Step 2) get Org properties or block parameters
     (org-ai--debug "frequencypenalty" frequency-penalty)
     (org-ai--debug "callbackmy" callback)
@@ -566,61 +563,58 @@ Called from `org-ai-complete-block' in main file with query string in `PROMPT' o
                         :callback callback
                         :stream stream)))
 
-;; (defun org-ai-agent-main(prompt messages context model max-tokens temperature top-p frequency-penalty presence-penalty service stream)
-;;   "Gate from Interface to API."
-;;   )
-;; (defun org-ai-agent-callback ()
-;;   "Gate from API to Interface.
-;; Not used for streaming text from API."
-;;   )
-
 
 ;; Together.xyz 2025
 ;; '(id "nz7KyaB-3NKUce-9539d1912ce8b148" object "chat.completion" created 1750575101 model "meta-llama/Llama-3.3-70B-Instruct-Turbo-Free" prompt []
 ;;   choices [(finish_reason "length" seed 3309196889559996400 logprobs nil index 0
 ;;             message (role "assistant" content " The answer is simple: live a long time. But how do you do that? Well, itâs not as simple as it sounds." tool_calls []))] usage (prompt_tokens 5 completion_tokens 150 total_tokens 155 cached_tokens 0))
 
-
-(defun org-ai--insert-single-response (end-marker &optional response)
-  "For Completion LLM mode.
-Used as callback for `org-ai-api-request'.
-Insert the response from the OpenAI API into #+begin_ai block.
-`CONTEXT' is the context of the special block. `BUFFER' is the
-buffer to insert the response into. `RESPONSE' is the response
-from the OpenAI API."
-  (org-ai--debug "end-marker:" end-marker
-                 "response:" response)
+(defun org-ai--get-single-response-text (&optional response)
+  "Return text from response or nil and signal error if it have \"error\" field.
+For Completion LLM mode. Used as callback for `org-ai-api-request'."
+  (org-ai--debug "response:" response)
   (when response
     (if-let ((error (plist-get response 'error)))
         (if-let ((message (plist-get error 'message))) (error message) (error error))
+      ;; else - no "error" field
       (if-let* ((choice (aref (plist-get response 'choices) 0))
                 (text (or (plist-get choice 'text)
                           ;; Together.xyz way
-                          (plist-get (plist-get choice 'message) 'content)))
-                (buffer (marker-buffer end-marker)))
-        (with-current-buffer buffer
-          (org-ai--debug "text:" text)
-          ;; set mark so we can easily select the generated text (e.g. to delet it to try again)
-          (unless org-ai--current-insert-position-marker
-            (push-mark end-marker))
-          (let ((pos (or (and org-ai--current-insert-position-marker
-                              (marker-position org-ai--current-insert-position-marker))
-                         end-marker))
-                (text-decoded (decode-coding-string text 'utf-8)))
-            (save-excursion
-              (goto-char pos)
+                          (plist-get (plist-get choice 'message) 'content))))
+          ;; - Decode text
+          (decode-coding-string text 'utf-8)))))
 
-              (when (string-suffix-p "#+end_ai" (buffer-substring-no-properties (point) (line-end-position)))
-                (insert "\n")
-                (backward-char))
-              (insert text-decoded)
+(defun org-ai--insert-single-response (end-marker &optional text insert-role)
+  "Insert the text into end of #+begin_ai block.
+`TEXT' is string from the response of OpenAI API. `END-MARKER' is a
+buffer and position at the end of block.
+Used For Completion LLM mode as callback for `org-ai-api-request'."
+  (org-ai--debug "end-marker:" end-marker
+                 "text:" text)
+  (when text
+    (if insert-role
+        (setq text (concat text "\n\n[ME]: ")))
+    (with-current-buffer (marker-buffer end-marker)
+      ;; set mark so we can easily select the generated text (e.g. to delet it to try again)
+      (unless org-ai--current-insert-position-marker
+        (push-mark end-marker))
+      (let ((pos (or (and org-ai--current-insert-position-marker
+                          (marker-position org-ai--current-insert-position-marker))
+                     end-marker)))
+        (save-excursion
+          (goto-char pos)
 
-              (condition-case hook-error
-                  (run-hook-with-args 'org-ai-after-chat-insertion-hook 'end text-decoded)
-                (error
-                 (message "Error during \"after-chat-insertion-hook\": %s" hook-error)))
+          (when (string-suffix-p "#+end_ai" (buffer-substring-no-properties (point) (line-end-position)))
+            (insert "\n")
+            (backward-char))
+          (insert text)
 
-              (setq org-ai--current-insert-position-marker (point-marker)))))))))
+          (condition-case hook-error
+              (run-hook-with-args 'org-ai-after-chat-insertion-hook 'end text)
+            (error
+             (message "Error during \"after-chat-insertion-hook\": %s" hook-error)))
+
+          (setq org-ai--current-insert-position-marker (point-marker)))))))
 
 
 ;; Here is an example for how a full sequence of OpenAI responses looks like:
@@ -821,11 +815,11 @@ the response into."
                                    (goto-char org-ai--current-insert-position-marker))
 
                                  ;; (message "inserting user prompt: %" (string= org-ai--current-chat-role "user"))
-                                 (let ((text (if insert-role
-                                                 (let ((text "\n\n[ME]: "))
-                                                   (insert text)
-                                                   text)
-                                               "")))
+                                 (let ((text "\n\n[ME]: "))
+                                   (if insert-role
+                                       (insert text)
+                                     ;; else
+                                     (setq text ""))
 
                                    (condition-case hook-error
                                        (run-hook-with-args 'org-ai-after-chat-insertion-hook 'end text)
