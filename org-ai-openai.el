@@ -32,11 +32,9 @@
 ;; - DONE: coding is broken for received text for not English languages
 ;; - DONE: make URLs as variables without hardcoding in functions and bunch of variables
 ;; - DONE: write guide to add new LLM provider
-;; - TODO: remove org-ai-block, org, org-element
+;; - DONE: remove org-ai-block, org, org-element
 ;; - TODO: rename all functions to convention
 ;; - TODO: rename file to -api.el
-;; - TODO: rename org-ai-stream-completion to "compose" something
-;; - TODO: split interface to two: one before parsing roles and second after
 
 
 ;;; Commentary:
@@ -67,8 +65,6 @@
 (require 'cl-lib)
 (require 'gv)
 (require 'json)
-
-;; (require 'org-ai-block)
 
 ;;; - Constants
 (defcustom org-ai-jump-to-end-of-block t

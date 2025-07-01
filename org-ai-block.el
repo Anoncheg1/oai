@@ -17,10 +17,11 @@
 ;; If not, see <https://www.gnu.org/licenses/>.
 
 ;;; Changelog
-;; - TODO: rename org-ai-special-block to org-ai-block-p
+;; - DONE: rename org-ai-special-block to org-ai-block-p
 ;; - DONE: complete is short for completion
 ;; - DONE: org-ai-block-get-info fail if there is nothing in block.
 ;; - DONE: rename all CONTEXT to ELEMENT because context cause confusing (Org terms).
+;; - DONE: rename all except interface functions to "org-ai-block-" prefix.
 
 ;;; Commentary:
 

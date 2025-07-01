@@ -14,14 +14,10 @@
 ;; - DONE: :stream nil/t parameter
 ;; - DONE: guide for connecting to custom LLM provider.
 ;; - DONE: Guide to add custom functions for text post-processing.
-;; - TODO: make org-ai-block dependent on org and org-ai-openai dependent on url only
+;; - DONE: make org-ai-block dependent on org and org-ai-openai dependent on url only. separate 'org-ai-block and 'org-ai-openai, for now org-ai-openai dependes on org-ai-block and org.
 ;; - TODO: rename all to "file-shit" naming convention
-;; - TODO: separate 'org-ai-block and 'org-ai-openai, for now org-ai-openai dependes on org-ai-block and org.
 ;; - TODO: make org-ai-variable.el and pass them to -api.el functions as parameters.
-;; - TODO: rename "org-ai-stream-completion" to "org-ai-openai-call"
-;; - TODO: where in org-ai-expand-block is it really what will be send? check corectness of roles with json
 ;; - TODO: provide ability to replace url-http with plz or org-ai-openai with llm(plz)
-;; - TODO: Org properties extraction in separate function.
 ;; - TODO: implement "#+PROPERTY: var  foo=1" and  "#+begin_ai :var foo=1" and to past to text in [foo]
 ;; - TODO: implement expanders for variables like links and references
 
