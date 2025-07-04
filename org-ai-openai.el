@@ -133,6 +133,11 @@ https://platform.openai.com/account/api-keys."
   :type 'string
   :group 'org-ai)
 
+(defcustom org-ai-default-max-tokens-add-recomendation t
+  "Additionally add system recomendation for chat mode about limit."
+  :type 'boolean
+  :group 'org-ai)
+
 (defcustom org-ai-default-chat-system-prompt "You are a helpful assistant inside Emacs."
   "The system message helps set the behavior of the assistant:
 https://platform.openai.com/docs/guides/chat/introduction.  This
@@ -321,8 +326,7 @@ Heavy to execute."
                             (not (member tline '("org-ai--debug-get-caller" "org-ai--debug" ) )))
                        (setq caller tline)
                      nil ; else
-                     ))
-            )
+                     )))
           ;; - lines
           (cdr (split-string bt "\n" t)))
          caller))
@@ -333,14 +337,19 @@ Otherwise format every to string and concatenate."
   (when (and org-ai-debug-buffer args)
     (let* ((buf-exist (get-buffer org-ai-debug-buffer))
            (bu (or buf-exist (get-buffer-create org-ai-debug-buffer)))
-           (bu-window (or (get-buffer-window bu) ; to prevent reopening
-                          (display-buffer-use-some-window bu nil))))
-
+           (current-window (selected-window))
+           (bu-window (or (get-buffer-window bu)
+                          (display-buffer-in-direction ; exist but hidden
+                           bu
+                           '((direction . left)
+                             (window . new)
+                             (window-width . 0.3)))
+                          (select-window current-window))))
       (with-current-buffer bu
         ;; - move point to  to bottom
         (if buf-exist ; was not created
             (goto-char (point-max)))
-        ;; - scroll debug buffer down
+        ;; ;; - scroll debug buffer down
         (if bu-window
             (with-selected-window (get-buffer-window bu)
               (with-no-warnings
@@ -513,50 +522,64 @@ whether messages are provided."
 ;;; - Main
 ;; org-ai-stream-completion - old
 
+(defun org-ai-openai--get-lenght-recomendation (max-tokens)
+  "Recomendation to limit yourself."
+  (cond ((< max-tokens 75)
+         (format "Answer with %d words limit." max-tokens))
+        ((and (>= max-tokens 75)
+              (< max-tokens 400))
+         (format "Answer with %d sentences limit." (/ max-tokens 20))))
+        ;; ((>= max-tokens 500) ; Paragraph or page. paragraph = 125 words, page = 500 words
+)
+
 ;; &optional &key prompt messages context model max-tokens temperature top-p frequency-penalty presence-penalty service stream
 (defun org-ai-api-request-prepare (req-type content end-marker sys-prompt sys-prompt-for-all-messages model max-tokens top-p temperature frequency-penalty presence-penalty service stream)
-  "Compose API request from Org block.
+  "Compose API request from data and start a server-sent event stream.
 Call `org-ai-api-request' function as a next step.
-Start a server-sent event stream.
-Called from `org-ai-complete-block' in main file with query string in `PROMPT' or in
+Called from `org-ai-interface-step1' in main file with query string in `PROMPT' or in
 `MESSAGES'.
-`CONTEXT' - where to put result.
+`REQ-TYPE' is completion or chat mostly.
+`CONTENT' is block content, used to create messages or prompt.
+`END-MARKER' is where to put result, created with `copy-marker'.
+`SYS-PROMPT' first system instruction as a string.
+`SYS-PROMPT-FOR-ALL-MESSAGES' from `org-ai-default-inject-sys-prompt-for-all-messages' variable.
 `MODEL' is the model to use.
 `MAX-TOKENS' is the maximum number of tokens to generate.
 `TEMPERATURE' is the temperature of the distribution.
 `TOP-P' is the top-p value.
 `FREQUENCY-PENALTY' is the frequency penalty.
 `PRESENCE-PENALTY' is the presence penalty.
-`CONTEXT' is the context of the special block.
 `SERVICE' string - is the AI cloud service such as 'openai or 'azure-openai'.
 `STREAM' string - as bool, indicates whether to stream the response."
   ;; - Step 1) get Org properties or block parameters
   (let* (
          (messages (unless (eql req-type 'completion)
+                     ;; - split content to messages
                      (org-ai-openai--collect-chat-messages content
-                                                    sys-prompt
-                                                    sys-prompt-for-all-messages))) ; org-ai-block.el
+                                                           sys-prompt
+                                                           sys-prompt-for-all-messages
+                                                           (if org-ai-default-max-tokens-add-recomendation
+                                                               (org-ai-openai--get-lenght-recomendation max-tokens)
+                                                             )))) ; org-ai-block.el
          ;; TODO: replace with result of `org-ai-agent-callback' call
          (callback (cond
                     (messages
-                          (lambda (result) (org-ai--insert-stream-response end-marker result t)))
+                     (org-ai--debug "messages" messages)
+                     (lambda (result) (org-ai--insert-stream-response end-marker result t)))
                     ;; - completion
                     (t (lambda (result) (org-ai--insert-single-response end-marker
                                                                         (org-ai--get-single-response-text result)
                                                                         nil))))))
     ;; - Step 2) get Org properties or block parameters
     (org-ai--debug "frequencypenalty" frequency-penalty)
-    (org-ai--debug "callbackmy" callback)
-    (org-ai-api-request :prompt content ; if completion
+    (org-ai-api-request service model callback
+                        :prompt content ; if completion
                         :messages messages
-                        :model model
                         :max-tokens max-tokens
                         :temperature temperature
                         :top-p top-p
                         :frequency-penalty frequency-penalty
                         :presence-penalty presence-penalty
-                        :service service
-                        :callback callback
                         :stream stream)))
 
 
@@ -827,7 +850,7 @@ the response into."
                                (when org-ai-jump-to-end-of-block (goto-char org-ai--current-insert-position-marker)))))))))
    normalized))
 ;; org-ai-stream-request - old
-(cl-defun org-ai-api-request (&optional &key prompt messages model max-tokens temperature top-p frequency-penalty presence-penalty service stream callback stream)
+(cl-defun org-ai-api-request (service model callback &optional &key prompt messages max-tokens temperature top-p frequency-penalty presence-penalty stream)
   "Use API to LLM to request and get response.
 Executed by `org-ai-api-request-prepare'
 `PROMPT' is the query for completions `MESSAGES' is the query for
@@ -842,16 +865,9 @@ penalty. `PRESENCE-PENALTY' is the presence penalty."
   ;; (setq org-ai--debug-data nil)
   ;; (setq org-ai--debug-data-raw nil)
   (setq org-ai--currently-inside-code-markers nil)
-  ;; - local
-  ;; (setq service (or (if (stringp service) (org-ai--read-service-name service) service)
-  ;;                   ;; (org-ai--service-of-model model)
-  ;;                   org-ai-service))
+
   (org-ai--debug service (type-of service))
   (org-ai--debug stream (type-of stream))
-  ;; (setq stream (if (and stream (string-equal-ignore-case stream "nil"))
-  ;;                  nil
-  ;;                ;; else
-  ;;                (org-ai--stream-supported service model)))
 
   ;; - HTTP body preparation as a string
   (let* ((url-request-extra-headers (org-ai--get-headers service))
@@ -889,7 +905,7 @@ penalty. `PRESENCE-PENALTY' is the presence penalty."
           (url-retrieve
            endpoint
            (lambda (_events)
-             (org-ai--debug "in url-retrieve callback!!!!!!!!!!." _events)
+             (org-ai--debug "url-retrieve callback:" _events)
 
              (with-current-buffer org-ai--current-request-buffer-for-stream
                (org-ai--debug-urllib org-ai--current-request-buffer-for-stream)
@@ -898,7 +914,7 @@ penalty. `PRESENCE-PENALTY' is the presence penalty."
              (org-ai-reset-stream-state))))
     (org-ai--debug "Main request after.")
 
-    ;; for stream add hook, otherwise remove
+    ;; - for stream add hook, otherwise remove
     (if stream
         (unless (member 'org-ai--url-request-on-change-function after-change-functions)
           (with-current-buffer org-ai--current-request-buffer-for-stream
@@ -948,7 +964,7 @@ penalty. `PRESENCE-PENALTY' is the presence penalty."
           t))
     (error nil)))
 
-(cl-defun org-ai--payload (&optional &key prompt messages model max-tokens temperature top-p frequency-penalty presence-penalty service stream)
+(cl-defun org-ai--payload (&optional &key service model prompt messages max-tokens temperature top-p frequency-penalty presence-penalty stream)
   "Create the payload for the OpenAI API.
 `PROMPT' is the query for completions `MESSAGES' is the query for
 chatgpt. `MODEL' is the model to use. `MAX-TOKENS' is the
@@ -957,6 +973,7 @@ temperature of the distribution. `TOP-P' is the top-p value.
 `FREQUENCY-PENALTY' is the frequency penalty. `PRESENCE-PENALTY'
 is the presence penalty.
 `STREAM' is a boolean indicating whether to stream the response."
+  (org-ai--debug "TTTTTTT22222")
   (let ((extra-system-prompt)
         (max-completion-tokens))
 
@@ -1178,12 +1195,16 @@ Set
     (setq org-ai--current-progress-timer-remaining-ticks 0)))
 
 
-(defun org-ai-openai--collect-chat-messages (content-string &optional default-system-prompt persistant-sys-prompts)
+(defun org-ai-openai--collect-chat-messages (content-string &optional default-system-prompt persistant-sys-prompts max-token-recommendation)
   "Takes `CONTENT-STRING' and splits it by [SYS]:, [ME]:, [AI]: and [AI_REASON]: markers.
 If `PERSISTANT-SYS-PROMPTS' is non-nil, [SYS] prompts are
 intercalated. The [SYS] prompt used is either
 `DEFAULT-SYSTEM-PROMPT', may be nil to disable, or the first [SYS]
 prompt found in `CONTENT-STRING'."
+  (if max-token-recommendation
+      (setq default-system-prompt (concat default-system-prompt
+                                          (if default-system-prompt " ")
+                                          max-token-recommendation)))
   (with-temp-buffer
     (erase-buffer)
     (insert content-string)

@@ -102,6 +102,9 @@
 
 ;; -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
+
+;; (defun org-ai-agent-mycall (service model prompt)
+
 (defcustom org-ai-agent-call #'org-ai-api-request-prepare ; org-ai-openai.el
   "Pass LLM adjusted information for further agent or LLM's API call.
 TODO: pass callback for writing "
