@@ -30,6 +30,7 @@
 ;; Note Org terms:
 ;; - element - "room" you are in (e.g., a paragraph) (TYPE PROPS) (org-element-at-point)
 ;; - context - "furniture" you are touching within that room (e.g., a bold word, a link). (TYPE PROPS) (org-element-context)
+;; - org-dblock-start-re
 
 ;;; Code:
 
@@ -43,6 +44,25 @@
 (when (boundp 'org-structure-template-alist)
   (add-to-list 'org-structure-template-alist '("A" . "ai")))
 
+;; - for org-element-at-point to work and org-ai-where-is-src-block-result
+(when (boundp 'org-element-greater-elements)
+  (setq org-element-greater-elements (remove 'special-block org-element-greater-elements)))
+
+
+(defun org-ai-block--org-element-context-advice (func-call &rest args)
+  "For `org-babel-where-is-src-block-result'.
+Allow to simplify code by using many org-babel functions."
+    (let ((element (apply func-call args)))
+      (if (and (eql (org-element-type element) 'special-block)
+               (string-equal "ai" (org-element-property :type element)))
+             (cons 'src-block (cdr element)) ; fake "ai" special-block as src-block
+        ;; else
+        element)))
+;; - both required for org-babel-where-is-src-block-result
+(advice-add 'org-element-context :around #'org-ai-block--org-element-context-advice)
+;; - required?????
+;; (advice-add 'org-element-at-point :around #'org-ai-block--org-element-context-advice)
+
 ;; `org-element-with-disabled-cache' is not available pre org-mode 9.6.6, i.e.
 ;; emacs 28 does not ship with it
 (defmacro org-ai-block--org-element-with-disabled-cache (&rest body)
@@ -53,7 +73,7 @@
 
 (defun org-ai-block-p ()
   "Are we inside a #+begin_ai...#+end_ai block?
-Like `org-in-src-block-p'."
+Like `org-in-src-block-p'. Return element."
   (org-ai-block--org-element-with-disabled-cache ;; with cache enabled we get weird Cached element is incorrect warnings
     (cl-loop with context = (org-element-context)
              while (and context
@@ -66,7 +86,8 @@ Like `org-in-src-block-p'."
   "Parse the header of #+begin_ai...#+end_ai block.
 `ELEMENT' is the element of the special block. Return an alist of
 key-value pairs.
-Like org-babel-get-src-block-info."
+Like `org-babel-get-src-block-info' but instead of list return only
+arguments."
   (let* ((element (or element (org-ai-block-p)))
          (header-start (org-element-property :post-affiliated element))
          (header-end (or (org-element-property :contents-begin element)
@@ -91,7 +112,6 @@ ignoring case."
 
 Will expand noweb templates if an 'org-ai-noweb' property or
 'noweb' header arg is \"yes\""
-
   (let* ((element (or element (org-ai-block-p)))
          (content-start (org-element-property :contents-begin element))
          (content-end (org-element-property :contents-end element))
@@ -154,7 +174,6 @@ Parameters are sourced from:
                                 ,@(when default-form `(,default-form))))))
      ,@body))
 
-
 (defun org-ai-block--get-contents-end-marker (element)
   "Return a marker for the :contents-end property of ELEMENT."
   (with-current-buffer (org-element-property :buffer element)
@@ -214,8 +233,17 @@ The numeric `ARG' can be used for killing the last n."
                 (cl-destructuring-bind (start . end) region
                   (kill-region end start)))))
 
-;; -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
+(org-babel-insert-result "test3" '("replace"))
+
+;;; -=-= Progress reporter for multiple requests
+
+;; (defun org-ai-block--progress-reporter-run ()
+
+;;   )
+
+;; -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+;;
 (provide 'org-ai-block)
 
 ;;; org-ai-block.el ends here

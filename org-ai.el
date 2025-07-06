@@ -117,6 +117,7 @@ TODO: pass callback for writing "
 (defun org-ai-ctrl-c-ctrl-c ()
   "Main command for #+begin_ai."
   (when-let ((element (org-ai-block-p))) ; org-ai-block.el
+    (print "here")
     (org-ai-interface-step1) ; here
     t))
 

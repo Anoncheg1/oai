@@ -231,7 +231,7 @@ For chat completion responses.")
 (defvar org-ai--current-progress-timer-remaining-ticks 0
   "The time when the timer started.")
 
-(defcustom org-ai-progress-duration 15
+(defcustom org-ai-progress-duration 25
   "The total duration in seconds for which the timer should run.
 Delay after which it will be killed."
   :type 'integer
@@ -239,8 +239,10 @@ Delay after which it will be killed."
 
 (defvar org-ai-after-chat-insertion-hook nil
   "Hook that is called when a chat response is inserted.
-Note this is called for every stream response so it will typically
-only contain fragments.")
+Note this is called for every stream response so it will typically only
+contain fragments.  First argument is `TYPE' - simbol 'role, 'text or
+'end, second is text or role name and third is position before text
+insertion.")
 
 (defvar org-ai--current-insert-position-marker nil
   "Where to insert the result.")
@@ -343,7 +345,7 @@ Otherwise format every to string and concatenate."
                            bu
                            '((direction . left)
                              (window . new)
-                             (window-width . 0.3)))
+                             (window-width . 0.2)))
                           (select-window current-window))))
       (with-current-buffer bu
         ;; - move point to  to bottom
@@ -523,21 +525,33 @@ whether messages are provided."
 ;; org-ai-stream-completion - old
 
 (defun org-ai-openai--get-lenght-recomendation (max-tokens)
-  "Recomendation to limit yourself."
-  (cond ((< max-tokens 75)
-         (format "Answer with %d words limit." max-tokens))
-        ((and (>= max-tokens 75)
-              (< max-tokens 400))
-         (format "Answer with %d sentences limit." (/ max-tokens 20))))
-        ;; ((>= max-tokens 500) ; Paragraph or page. paragraph = 125 words, page = 500 words
+  "Recomendation to limit yourself.
+- words = tokens * 0.75
+- tokens = words * 1.33333
+- token = 4 characters
+- word - 5 characters
+- sentence - 15-25 words = 20 words = 26 tokens (tech/academ larger)
+- paragraph - 6 sentences, 500-750 characters, 150-300 words = 150 words = 200 tokens
+- page - around 3-4 paragraphs, 500 words = 600 tokens
+"
+  (when max-tokens
+    (cond ((< max-tokens 75)
+           (format "Do final answer with %d words limit." (* max-tokens 0.75)))
+          ((and (>= max-tokens 75)
+                (< max-tokens 300))
+           (format "Do final answer with %d sentences limit." (/ max-tokens 29)))
+          ((and (>= max-tokens 300)
+                (<= max-tokens 1000))
+           (format "Do final answer with %d paragraph or %d pages limit length, but not strict." (/ max-tokens 200) (ceiling (/ max-tokens 600.0))))
+          )
+    )
 )
 
 ;; &optional &key prompt messages context model max-tokens temperature top-p frequency-penalty presence-penalty service stream
 (defun org-ai-api-request-prepare (req-type content end-marker sys-prompt sys-prompt-for-all-messages model max-tokens top-p temperature frequency-penalty presence-penalty service stream)
   "Compose API request from data and start a server-sent event stream.
 Call `org-ai-api-request' function as a next step.
-Called from `org-ai-interface-step1' in main file with query string in `PROMPT' or in
-`MESSAGES'.
+Called from `org-ai-interface-step1' in main file.
 `REQ-TYPE' is completion or chat mostly.
 `CONTENT' is block content, used to create messages or prompt.
 `END-MARKER' is where to put result, created with `copy-marker'.
@@ -605,9 +619,9 @@ For Completion LLM mode. Used as callback for `org-ai-api-request'."
 
 (defun org-ai--insert-single-response (end-marker &optional text insert-role)
   "Insert the text into end of #+begin_ai block.
-`TEXT' is string from the response of OpenAI API. `END-MARKER' is a
-buffer and position at the end of block.
-Used For Completion LLM mode as callback for `org-ai-api-request'."
+`TEXT' is string from the response of OpenAI API extracted with `org-ai--get-single-response-text'.
+`END-MARKER' is a buffer and position at the end of block.  Used For
+Completion LLM mode as callback for `org-ai-api-request'."
   (org-ai--debug "end-marker:" end-marker
                  "text:" text)
   (when text
@@ -629,7 +643,7 @@ Used For Completion LLM mode as callback for `org-ai-api-request'."
           (insert text)
 
           (condition-case hook-error
-              (run-hook-with-args 'org-ai-after-chat-insertion-hook 'end text)
+              (run-hook-with-args 'org-ai-after-chat-insertion-hook 'end text (marker-position pos))
             (error
              (message "Error during \"after-chat-insertion-hook\": %s" hook-error)))
 
@@ -766,7 +780,7 @@ the response into."
                  (with-current-buffer buffer
                    (let ((pos (or (and org-ai--current-insert-position-marker
                                        (marker-position org-ai--current-insert-position-marker))
-                                  end-marker
+                                  (marker-position end-marker)
                                   (point))))
                      (save-excursion
                        (goto-char pos)
@@ -796,9 +810,9 @@ the response into."
                                        (insert "\n[SYS]: ")))
 
                                      (condition-case hook-error
-                                       (run-hook-with-args 'org-ai-after-chat-insertion-hook 'role role)
+                                         (run-hook-with-args 'org-ai-after-chat-insertion-hook 'role role pos)
                                      (error
-                                      (message "Error during \"after-chat-insertion-hook\": %s" hook-error)))
+                                      (message "Error during \"after-chat-insertion-hook\" for role: %s" hook-error)))
 
                                      (setq org-ai--current-insert-position-marker (point-marker)))))))
 
@@ -821,9 +835,9 @@ the response into."
                                      (fill-paragraph))
 
                                    (condition-case hook-error
-                                       (run-hook-with-args 'org-ai-after-chat-insertion-hook 'text text)
+                                       (run-hook-with-args 'org-ai-after-chat-insertion-hook 'text text pos)
                                      (error
-                                      (message "Error during \"after-chat-insertion-hook\": %s" hook-error)))
+                                      (message "Error during \"after-chat-insertion-hook\" for text: %s" hook-error)))
                                    )
                                  (setq org-ai--chat-got-first-response t)
                                  (setq org-ai--current-insert-position-marker (point-marker)))))
@@ -841,7 +855,7 @@ the response into."
                                      (setq text ""))
 
                                    (condition-case hook-error
-                                       (run-hook-with-args 'org-ai-after-chat-insertion-hook 'end text)
+                                       (run-hook-with-args 'org-ai-after-chat-insertion-hook 'end text (marker-position org-ai--current-insert-position-marker))
                                      (error
                                       (message "Error during \"after-chat-insertion-hook\": %s" hook-error)))
                                    (setq org-ai--current-insert-position-marker (point-marker))))
@@ -896,8 +910,8 @@ penalty. `PRESENCE-PENALTY' is the presence penalty."
     ;; - `org-ai--url-request-on-change-function' (call) , `org-ai-reset-stream-state' (just set nil)
     ;; - it is `org-ai--insert-stream-response' or `org-ai--insert-single-response'
     (setq org-ai--current-request-callback callback)
-    ;; - run timer that show /-\ looping
-    (when (not stream) (org-ai--progress-reporter-until-request-done))
+    ;; - run timer that show /-\ looping, notification of status
+    (when (not stream) (org-ai--progress-reporter-run))
 
 
     (org-ai--debug "Main request before, that return a \"urllib buffer\".")
@@ -973,7 +987,6 @@ temperature of the distribution. `TOP-P' is the top-p value.
 `FREQUENCY-PENALTY' is the frequency penalty. `PRESENCE-PENALTY'
 is the presence penalty.
 `STREAM' is a boolean indicating whether to stream the response."
-  (org-ai--debug "TTTTTTT22222")
   (let ((extra-system-prompt)
         (max-completion-tokens))
 
@@ -1108,11 +1121,16 @@ and the length in chars of the pre-change text replaced by that range."
             (or
              (string-prefix-p "o1-pro" model)))))
 
+;; (defun org-ai--kill-query-process ()
+;;   (let ((proc (get-buffer-process org-ai--current-request-buffer-for-stream)))
+;;     (set-process-sentinel proc 'ignore)
+;;     (delete-process proc)))
+
 (defun org-ai-interrupt-current-request ()
   "Interrupt the current request."
   (interactive)
   (when (and org-ai--current-request-buffer-for-stream (buffer-live-p org-ai--current-request-buffer-for-stream))
-    (let (kill-buffer-query-functions)
+    (let (kill-buffer-query-functions) ; set to nil
       (kill-buffer org-ai--current-request-buffer-for-stream))
     (setq org-ai--current-request-buffer-for-stream nil)
     (org-ai-reset-stream-state)))
@@ -1130,9 +1148,10 @@ and the length in chars of the pre-change text replaced by that range."
   (setq org-ai--current-request-is-streamed nil)
   (org-ai--progress-reporter-cancel))
 
-(defvar org-ai--progress-reporter-waiting-for-response "Waiting for a response")
+;;; -=-= Progress reporter for Single-request
+(defvar org-ai--progress-reporter-waiting-string "Waiting for a response")
 
-(defun org-ai--progress-reporter-until-request-done ()
+(defun org-ai--progress-reporter-run ()
   "
 Set
 - `org-ai--current-progress-reporter' - lambda that return a string.
@@ -1140,7 +1159,7 @@ Set
 - `org-ai--current-progress-timer-remaining-ticks'
 "
   (org-ai--progress-reporter-cancel)
-  (setq org-ai--current-progress-reporter (make-progress-reporter org-ai--progress-reporter-waiting-for-response))
+  (setq org-ai--current-progress-reporter (make-progress-reporter org-ai--progress-reporter-waiting-string))
 
   (let ((repeat-every-sec 0.2))
     ;; - precalculate ticks based on duration
@@ -1170,21 +1189,11 @@ Set
         (progn ; from `url-queue-kill-job'
           ;; (progress-reporter-done org-ai--current-progress-reporter)
           (progress-reporter-update org-ai--current-progress-reporter nil "- Connection failed")
-          (message (concat org-ai--progress-reporter-waiting-for-response "- Connection failed"))
+          (message (concat org-ai--progress-reporter-waiting-string "- Connection failed"))
           (setq org-ai--current-progress-reporter nil)
-          (when (buffer-live-p org-ai--current-request-buffer-for-stream)
-            ;; (ignore-errors
-              (let ((proc (get-buffer-process org-ai--current-request-buffer-for-stream)))
-              ;; (interrupt-process (get-buffer-process org-ai--current-request-buffer-for-stream))
-              ;; (kill-process (get-buffer-process org-ai--current-request-buffer-for-stream))
-              (set-process-sentinel proc 'ignore)
-              ;; (with-current-buffer org-ai--current-request-buffer-for-stream
-              ;;   (let ((buffer-modified-p nil))
-              ;;     (kill-buffer org-ai--current-request-buffer-for-stream)))
-
-              ;; (setq org-ai--current-request-buffer-for-stream nil)
-              (delete-process proc)
-              ))
+          (org-ai-interrupt-current-request)
+          ;; (when (buffer-live-p org-ai--current-request-buffer-for-stream)
+          ;;   (org-ai--kill-query-process))
           )
       ;; else success
       (progress-reporter-done org-ai--current-progress-reporter)
