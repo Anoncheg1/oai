@@ -201,9 +201,9 @@ It's designed to \"do the right thing\":
        ;;  (org-ai-talk-stop)) ; org-ai-talk
        ;; (org-ai-oobabooga--current-request ; org-ai-oobabooga
        ;;  (org-ai-oobabooga-stop)) ; org-ai-oobabooga
-       (org-ai--current-request-buffer-for-stream ; org-ai-openai.el
-        (org-ai-interrupt-current-request)) ; org-ai-openai.el
-       (org-ai--current-request-buffer ; org-ai-openai.el
+       ;; (org-ai--current-request-buffer-for-stream ; org-ai-openai.el
+       ;;  (org-ai-interrupt-current-request)) ; org-ai-openai.el
+       (org-ai-block--element-marker-variable-dict ; org-ai-openai.el
         (org-ai-interrupt-current-request)) ; org-ai-openai.el
        ;; (org-ai--current-request-buffer-for-image ; org-ai-openai-image.el
        ;;  (org-ai-image-interrupt-current-request)) ; org-ai-openai-image.el
@@ -245,6 +245,14 @@ It's designed to \"do the right thing\":
 (org-ai--install-keyboard-quit-advice) ; here
 
 ;; -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+
+(defun org-ai-open-request-buffer ()
+  "A debug helper that opens the url request buffer."
+  (interactive)
+  ;; TODO GET BUFEER
+  (when (url-buffer)
+    (pop-to-buffer url-buffer)))
+
 
 (defvar org-ai-global-prefix-map (make-sparse-keymap)
   "Keymap for `org-ai-global-mode'.")

@@ -27,6 +27,9 @@
 
 ;; Defines functions for dealing with #+begin_ai..#+end_ai special blocks
 
+;; None Org babel: We choose not to fake as babel source block and use
+;; functionality because it require too much advices.
+
 ;; Note Org terms:
 ;; - element - "room" you are in (e.g., a paragraph) (TYPE PROPS) (org-element-at-point)
 ;; - context - "furniture" you are touching within that room (e.g., a bold word, a link). (TYPE PROPS) (org-element-context)
@@ -38,30 +41,19 @@
 (require 'org-element)
 (require 'org-macs)
 
+(defvar org-ai-block--element-marker-variable-dict nil
+  "Allow to store url buffer per block.
+Intented for usage with `org-ai-block--copy-header-marker' and keep pairs of
+( block marker-> url-retrieve buffer).
+Should be used for interactive interrup of request only.")
+(make-variable-buffer-local 'org-ai-block--element-marker-variable-dict)
+
 (when (and (boundp 'org-protecting-blocks) (listp org-protecting-blocks))
   (add-to-list 'org-protecting-blocks "ai"))
 
 (when (boundp 'org-structure-template-alist)
   (add-to-list 'org-structure-template-alist '("A" . "ai")))
 
-;; - for org-element-at-point to work and org-ai-where-is-src-block-result
-(when (boundp 'org-element-greater-elements)
-  (setq org-element-greater-elements (remove 'special-block org-element-greater-elements)))
-
-
-(defun org-ai-block--org-element-context-advice (func-call &rest args)
-  "For `org-babel-where-is-src-block-result'.
-Allow to simplify code by using many org-babel functions."
-    (let ((element (apply func-call args)))
-      (if (and (eql (org-element-type element) 'special-block)
-               (string-equal "ai" (org-element-property :type element)))
-             (cons 'src-block (cdr element)) ; fake "ai" special-block as src-block
-        ;; else
-        element)))
-;; - both required for org-babel-where-is-src-block-result
-(advice-add 'org-element-context :around #'org-ai-block--org-element-context-advice)
-;; - required?????
-;; (advice-add 'org-element-at-point :around #'org-ai-block--org-element-context-advice)
 
 ;; `org-element-with-disabled-cache' is not available pre org-mode 9.6.6, i.e.
 ;; emacs 28 does not ship with it
@@ -173,9 +165,10 @@ Parameters are sourced from:
                                    `(org-entry-get-with-inheritance ,(symbol-name sym))))
                                 ,@(when default-form `(,default-form))))))
      ,@body))
-
+;; not used
 (defun org-ai-block--get-contents-end-marker (element)
-  "Return a marker for the :contents-end property of ELEMENT."
+  "Return a marker for the :contents-end property of ELEMENT.
+Used in `org-ai-interface-step1'"
   (with-current-buffer (org-element-property :buffer element)
     (let ((contents-end-pos (org-element-property :contents-end element)))
       (when contents-end-pos
@@ -234,7 +227,7 @@ The numeric `ARG' can be used for killing the last n."
                   (kill-region end start)))))
 
 
-(org-babel-insert-result "test3" '("replace"))
+;; (org-babel-insert-result "test3" '("replace"))
 
 ;;; -=-= Progress reporter for multiple requests
 
@@ -243,6 +236,107 @@ The numeric `ARG' can be used for killing the last n."
 ;;   )
 
 ;; -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+
+(defun org-ai-block--copy-header-marker ()
+  "Return marker for ai block at current buffer at current positon."
+  (save-excursion
+    (goto-char (org-element-property :contents-begin (org-ai-block-p)))
+    (forward-line -1)
+    (copy-marker (point))))
+
+(defun org-ai-insert-result (result &optional result-params hash exec-time)
+  "Modified `org-babel-insert-result' function.
+Insert RESULT into the current buffer.
+TODO: EXEC-TIME."
+  (when (stringp result)
+    (setq result (substring-no-properties result)))
+  (save-excursion
+    (let* ((visible-beg (point-min-marker))
+           (visible-end (copy-marker (point-max) t))
+           (existing-result (org-ai-where-is-ai-result t nil hash))
+           ;; When results exist outside of the current visible
+           ;; region of the buffer, be sure to widen buffer to
+           ;; update them.
+           (outside-scope (and existing-result
+                               (buffer-narrowed-p)
+                               (or (> visible-beg existing-result)
+                                   (<= visible-end existing-result))))
+           beg end indent)
+      (unwind-protect
+          (progn
+            (when outside-scope (widen)) ;; ---- WIDDEN
+            (goto-char existing-result) ;; must be true
+            (setq indent (current-indentation))
+            (forward-line 1)
+            (setq beg (point))
+            (cond
+             ((member "replace" result-params)
+              (delete-region (point) (org-babel-result-end)))
+             ((member "append" result-params)
+              (goto-char (org-babel-result-end)) (setq beg (point-marker))))
+            (goto-char beg) (insert result)
+            (setq end (copy-marker (point) t))
+            (when outside-scope (narrow-to-region visible-beg visible-end)) ;; ---- NARROW
+            )))))
+
+(defun org-ai-where-is-ai-result (&optional insert _info hash)
+  "Modified `org-babel-where-is-src-block-result' function."
+  (let ((context (org-ai-block-p)))
+    (catch :found
+      (org-with-wide-buffer
+       (let* ((name (org-element-property :name context))
+              (named-results (and name (org-babel-find-named-result name))))
+         (goto-char (or named-results (org-element-end context)))
+         (print (list "name" name named-results))
+         (cond
+          ;; Existing results named after the current source.
+          (named-results
+           (when (org-babel--clear-results-maybe hash)
+             (org-babel--insert-results-keyword name hash))
+           (throw :found (point)))
+          ;; Named results expect but none to be found.
+          (name)
+          ;; No possible anonymous results at the very end of
+          ;; buffer or outside CONTEXT parent.
+          ((eq (point)
+               (or (pcase (org-element-type (org-element-parent context))
+                     ((or `section `org-data)
+                      (org-element-end (org-element-parent context)))
+                     (_ (org-element-contents-end
+                         (org-element-parent context))))
+                   (point-max))))
+          ;; Check if next element is an anonymous result below
+          ;; the current block.
+          ((let* ((next (org-element-at-point))
+                  (end (save-excursion
+                         (goto-char
+                          (org-element-post-affiliated next))
+                         (line-end-position)))
+                  (empty-result-re (concat org-babel-result-regexp "$"))
+                  (case-fold-search t))
+             (re-search-forward empty-result-re end t))
+           (forward-line 0)
+           (when (org-babel--clear-results-maybe hash)
+             (org-babel--insert-results-keyword nil hash))
+           (throw :found (point)))))
+     ;; ;; Ignore other elements.
+     ;; (_ (throw :found nil))
+       )
+      ;; No result found.  Insert a RESULTS keyword below element, if
+      ;; appropriate.  In this case, ensure there is an empty line
+      ;; after the previous element.
+      (when insert
+        (print "here")
+        (save-excursion
+          (goto-char (min (org-element-end context) (point-max)))
+          (skip-chars-backward " \t\n")
+          (forward-line)
+          (unless (bolp) (insert "\n"))
+          (insert "\n")
+          (org-babel--insert-results-keyword
+           (org-element-property :name context) hash)
+          (point)))))
+)
 ;;
 (provide 'org-ai-block)
 
