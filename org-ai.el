@@ -256,10 +256,16 @@ It's designed to \"do the right thing\":
   (if org-ai-mode
       (progn
         (add-hook 'org-ctrl-c-ctrl-c-hook #'org-ai-ctrl-c-ctrl-c nil 'local)
-        (advice-add 'keyboard-quit :before #'org-ai-keyboard-quit))
+        (advice-add 'keyboard-quit :before #'org-ai-keyboard-quit)
+        (add-hook 'org-font-lock-set-keywords-hook #'org-ai-block--set-ai-keywords)
+        ;; (advice-add 'org-fontify-meta-lines-and-blocks-1 :around #'org-ai--org-fontify-meta-lines-and-blocks-1-advice)
+        ;; (advice-add 'org-fontify-meta-lines-and-blocks-1 :before #'org-ai--org-fontify-meta-lines-and-blocks-1-advice)
+        )
     ;; else - off
     (remove-hook 'org-ctrl-c-ctrl-c-hook #'org-ai-ctrl-c-ctrl-c 'local)
-    (advice-remove 'keyboard-quit #'org-ai-keyboard-quit)))
+    (advice-remove 'keyboard-quit #'org-ai-keyboard-quit)
+    (remove-hook 'org-font-lock-set-keywords-hook #'org-ai-block--set-ai-keywords)
+   ))
 
 ;;;###autoload
 (defun org-ai-open-request-buffer ()

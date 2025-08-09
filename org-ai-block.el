@@ -36,7 +36,7 @@
 ;; - org-dblock-start-re
 
 ;;; Code:
-
+;;; -=-= all
 (require 'org)
 (require 'org-element)
 (require 'org-macs)
@@ -196,6 +196,10 @@ line."
 
 ;;; -=-= Interactive
 
+(defcustom org-ai-block-fontify-markdown t
+  "fontinfy ```lang blocks."
+  :type 'boolean
+  :group 'org-ai)
 
 (defun org-ai-mark-last-region ()
   "Marks the last prompt in an org-ai block."
@@ -254,21 +258,12 @@ The numeric `ARG' can be used for killing the last n."
                 (cl-destructuring-bind (start . end) region
                   (kill-region end start)))))
 
-
-;; (org-babel-insert-result "test3" '("replace"))
-
-;;; -=-= TODO: Progress reporter for multiple requests
-
-;; (defun org-ai-block--progress-reporter-run ()
-
-;;   )
 ;;; -=-= Markers
 
 (defun org-ai-block--get-content-end-marker (&optional element)
   "Return a marker for the :contents-end property of ELEMENT.
 Used in `org-ai-interface-step1'"
   (let ((el (or element (org-ai-block-p))))
-    ;; (with-current-buffer (org-element-property :buffer el)
     (let ((contents-end-pos (org-element-property :contents-end el)))
       (when contents-end-pos
         (copy-marker contents-end-pos)))))
@@ -284,7 +279,7 @@ Use ELEMENT only in current moment."
           (forward-line -1)
           (copy-marker (point))))))
 
-;;; -=-=-=-= Result
+;;; -=-= Result
 
 
 (defun org-ai-insert-result (result &optional result-params hash exec-time)
@@ -381,7 +376,57 @@ TODO: EXEC-TIME."
           (point)))))
 )
 ;;
+
+
+
+;;; -=-= Markdown block
+(defun org-ai--fontify-markdown-subblocks (start end)
+  "Fontify ```language ... ``` fenced mardown code blocks.
+Used to call `org-src-font-lock-fontify-block' on code subblock."
+  (goto-char start)
+  (let ((case-fold-search t))
+    (while (and (< (point) end)
+                (re-search-forward "^```\\([^ \t\n[{]+\\)[\s-]?$" end t))
+      (let* ((lang (match-string 1))
+             (block-begin (match-end 0)))
+        ;; (print (list "re-search-forward4" (point) end))
+        (when (re-search-forward "^```[\s-]?$" end t)
+          (let ((block-end (match-beginning 0)))
+            (when (fboundp (org-src-get-lang-mode lang)) ; for org-src-font-lock-fontify-block
+              (org-src-font-lock-fontify-block lang block-begin block-end)
+              )))))))
+
+(defun org-ai--font-lock-fontify-ai-subblocks (limit)
+  "Fontify Org links inside #+begin_ai ... #+end_ai blocks up to LIMIT.
+We insert advice right after `org-fontify-meta-lines-and-blocks-1' witch
+called as a part of Org Font Lock mode configuration of keywords and
+corresponding font-lock highlighting rules in `font-lock-defaults'
+variable."
+  (if org-ai-block-fontify-markdown
+      (let ((case-fold-search t))
+        (while (and (re-search-forward "^#\\+begin_ai[^\n]*\n" limit t)
+                    (< (point) limit))
+          (let ((beg (match-end 0)))
+            (when (re-search-forward "^#\\+end_ai.*$" nil t)
+              (let ((end (match-beginning 0)))
+                (save-match-data
+                  (org-ai--fontify-markdown-subblocks beg end))
+                ))))))
+  ;; required by font lock mode:
+  (goto-char limit)
+  t)
+
+(defun org-ai-block--insert-after (list pos element)
+  "Insert ELEMENT at after position POS in LIST."
+  (nconc (take (1+ pos) list) (list element) (nthcdr (1+ pos) list)))
+
+(defun org-ai-block--set-ai-keywords()
+  "Insert ower function in Org font lock keywords."
+  (setq org-font-lock-extra-keywords (org-ai-block--insert-after
+                                      org-font-lock-extra-keywords
+                                      (seq-position org-font-lock-extra-keywords '(org-fontify-meta-lines-and-blocks))
+                                      '(org-ai--font-lock-fontify-ai-subblocks))))
+
+;;; provide
 (provide 'org-ai-block)
-
-
 ;;; org-ai-block.el ends here
