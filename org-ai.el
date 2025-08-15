@@ -104,8 +104,6 @@
 
 ;;; - Agent function
 
-;; (defun org-ai-agent-mycall (service model prompt)
-
 (defcustom org-ai-agent-call #'org-ai-api-request-prepare ; org-ai-openai.el
   "Pass processed org-ai block info to AI assistent or some Emacs agent.
 See `org-ai-interface-step1' and `org-ai-api-request-prepare' for parameters.
@@ -113,7 +111,7 @@ TODO: pass callback for writing."
   :type 'function
   :group 'org-ai)
 
-;;; - C-c C-c
+;;; - C-c C-c main interface
 (defun org-ai-ctrl-c-ctrl-c ()
   "Main command for #+begin_ai."
   (when-let ((element (org-ai-block-p))) ; org-ai-block.el
@@ -140,7 +138,7 @@ Read Org parameters and send the text content to next step."
     ;; - Process Org params and call agent
     (org-ai-block--let-params info
                               ;; format: (variable optional-default type)
-                              ((service :type identity)
+                              ((service :type string)
                                (model (if (eql req-type 'chat)
                                           (org-ai--get-value-or-string org-ai-creds-chat-model service)
                                         (org-ai--get-value-or-string org-ai-creds-completion-model service)
@@ -150,17 +148,14 @@ Read Org parameters and send the text content to next step."
                                (temperature nil :type number)
                                (frequency-penalty nil :type number)
                                (presence-penalty nil :type number)
-                               (stream "t" :type string))
+                               (stream "t" :type string)
+                               )
+                              (print (list "service" service (type-of service)))
                               ;; - body with some Org "Post-parsing":
                               ;; (print (list "SERVICE" service (stringp service) (org-ai--read-service-name service)))
                               (let (
-                                    (service (if (stringp service) ; t
-                                                     (or
-                                                      (intern-soft service) ; nil
-                                                      service) ; str ; org-ai-openai.el
-                                                   ;; (org-ai--service-of-model model)
-                                                   ;; else
-                                                   org-ai-service)) ; default ; org-ai-openai.el
+                                    (service (or service
+                                                 org-ai-service)) ; default in org-ai-openai.el
                                     (stream (if (and stream (string-equal-ignore-case stream "nil"))
                                                 nil
                                               ;; else
@@ -170,7 +165,7 @@ Read Org parameters and send the text content to next step."
                                          model max-tokens top-p temperature frequency-penalty presence-penalty service stream ; model params
                                          )))))
 
-;;; - M-x org-ai-expand-block
+;;; - key M-x: org-ai-expand-block
 ;;;###autoload
 (defun org-ai-expand-block (&optional element)
   "Show a temp buffer with what the org-ai block expands to.
@@ -185,7 +180,7 @@ Like `org-babel-expand-src-block'."
                                   (insert expanded))))
       expanded)))
 
-;;; - keyboard quit C-g
+;;; - key C-g: keyboard quit
 
 ;; (defvar org-ai-talk--reading-process)
 (defun org-ai-keyboard-quit ()
@@ -223,14 +218,13 @@ It's designed to \"do the right thing\":
              )
           (error nil)))))
 
-(defun org-ai--install-keyboard-quit-advice () ; TODO: make Org only
-  "Cancel current request when `keyboard-quit' is called."
-  (unless (advice-member-p #'org-ai-keyboard-quit 'keyboard-quit) ; here
-    (advice-add 'keyboard-quit :before #'org-ai-keyboard-quit)))
+;; (defun org-ai--install-keyboard-quit-advice () ; TODO: make Org only
+;;   "Cancel current request when `keyboard-quit' is called."
+;;   (advice-add 'keyboard-quit :before #'org-ai-keyboard-quit))
 
-(defun org-ai--uninstall-keyboard-quit-advice ()
-  "Remove the advice that cancels current request when `keyboard-quit' is called."
-  (advice-remove 'keyboard-quit #'org-ai-keyboard-quit)) ; here
+;; (defun org-ai--uninstall-keyboard-quit-advice ()
+;;   "Remove the advice that cancels current request when `keyboard-quit' is called."
+;;   (advice-remove 'keyboard-quit #'org-ai-keyboard-quit)) ; here
 
 ;;; - Minor mode
 
@@ -258,8 +252,6 @@ It's designed to \"do the right thing\":
         (add-hook 'org-ctrl-c-ctrl-c-hook #'org-ai-ctrl-c-ctrl-c nil 'local)
         (advice-add 'keyboard-quit :before #'org-ai-keyboard-quit)
         (add-hook 'org-font-lock-set-keywords-hook #'org-ai-block--set-ai-keywords)
-        ;; (advice-add 'org-fontify-meta-lines-and-blocks-1 :around #'org-ai--org-fontify-meta-lines-and-blocks-1-advice)
-        ;; (advice-add 'org-fontify-meta-lines-and-blocks-1 :before #'org-ai--org-fontify-meta-lines-and-blocks-1-advice)
         )
     ;; else - off
     (remove-hook 'org-ctrl-c-ctrl-c-hook #'org-ai-ctrl-c-ctrl-c 'local)

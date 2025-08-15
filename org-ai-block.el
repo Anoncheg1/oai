@@ -73,24 +73,18 @@ Like `org-in-src-block-p'. Return element."
       (goto-char marker)
       (org-ai-block-p))))
 
-(defun org-ai-block-get-info (&optional element)
+(defun org-ai-block-get-info (&optional element no-eval)
   "Parse the header of #+begin_ai...#+end_ai block.
 `ELEMENT' is the element of the special block. Return an alist of
 key-value pairs.
 Like `org-babel-get-src-block-info' but instead of list return only
 arguments.
+To get value use: (alist-get :value (org-ai-block-get-info))
 Use ELEMENT only in current moment."
-  (let* ((element (or element (org-ai-block-p)))
-         (header-start (org-element-property :post-affiliated element))
-         (header-end (or (org-element-property :contents-begin element)
-                         (point-at-eol))) ; fix for empty block
-                     )
-    (if (or (not header-start) (not header-end))
-        (error "Error: org-ai was not able to extract the beginning/end of the org-ai block")
-      (save-match-data
-        (let* ((string (string-trim (buffer-substring-no-properties header-start header-end)))
-               (string (string-trim-left (replace-regexp-in-string "^#\\+begin_ai" "" string))))
-          (org-babel-parse-header-arguments string))))))
+  (org-babel-parse-header-arguments
+   (org-element-property
+    :parameters
+    (or element (org-ai-block-p))) no-eval))
 
 (defun org-ai-block--string-equal-ignore-case (string1 string2)
   "Helper for backwards compat.
@@ -380,23 +374,26 @@ TODO: EXEC-TIME."
 
 
 ;;; -=-= Markdown block
-(defun org-ai--fontify-markdown-subblocks (start end)
+(defvar org-ai-block--markdown-begin-re "^```\\([^ \t\n[{]+\\)[\s-]?\n")
+(defvar org-ai-block--markdown-end-re "^```[\s-]?$")
+
+(defun org-ai-block--fontify-markdown-subblocks (start end)
   "Fontify ```language ... ``` fenced mardown code blocks.
 Used to call `org-src-font-lock-fontify-block' on code subblock."
   (goto-char start)
   (let ((case-fold-search t))
     (while (and (< (point) end)
-                (re-search-forward "^```\\([^ \t\n[{]+\\)[\s-]?$" end t))
+                (re-search-forward org-ai-block--markdown-begin-re end t))
       (let* ((lang (match-string 1))
              (block-begin (match-end 0)))
         ;; (print (list "re-search-forward4" (point) end))
-        (when (re-search-forward "^```[\s-]?$" end t)
+        (when (re-search-forward org-ai-block--markdown-end-re end t)
           (let ((block-end (match-beginning 0)))
             (when (fboundp (org-src-get-lang-mode lang)) ; for org-src-font-lock-fontify-block
               (org-src-font-lock-fontify-block lang block-begin block-end)
               )))))))
 
-(defun org-ai--font-lock-fontify-ai-subblocks (limit)
+(defun org-ai-block--font-lock-fontify-ai-subblocks (limit)
   "Fontify Org links inside #+begin_ai ... #+end_ai blocks up to LIMIT.
 We insert advice right after `org-fontify-meta-lines-and-blocks-1' witch
 called as a part of Org Font Lock mode configuration of keywords and
@@ -410,7 +407,7 @@ variable."
             (when (re-search-forward "^#\\+end_ai.*$" nil t)
               (let ((end (match-beginning 0)))
                 (save-match-data
-                  (org-ai--fontify-markdown-subblocks beg end))
+                  (org-ai-block--fontify-markdown-subblocks beg end))
                 ))))))
   ;; required by font lock mode:
   (goto-char limit)
@@ -425,8 +422,45 @@ variable."
   (setq org-font-lock-extra-keywords (org-ai-block--insert-after
                                       org-font-lock-extra-keywords
                                       (seq-position org-font-lock-extra-keywords '(org-fontify-meta-lines-and-blocks))
-                                      '(org-ai--font-lock-fontify-ai-subblocks))))
+                                      '(org-ai-block--font-lock-fontify-ai-subblocks))))
 
+;; not used now
+(defun markdown-mark-fenced-code-body (&optional limit-begin limit-end)
+  "Mark content inside Markdown fenced code block (```), excluding header/footer.
+LIMIT-BEGIN and LIMIT-END restrict the search region around point.
+Returns t if region was marked, nil otherwise."
+    (let ((point-pos (point))
+          (start nil)
+          (end nil))
+      (save-excursion
+        ;; Find start fence
+        (when (re-search-backward org-ai-block--markdown-begin-re (or limit-begin (point-min)) t)
+          (setq start (match-end 0))
+          (goto-char point-pos)
+          ;; do we inside owr block?
+          (when (and (re-search-backward org-ai-block--markdown-end-re  (or limit-begin (point-min)) t)
+                     (> (match-beginning 0) start)
+                     (setq start nil))))
+        ;; Find end fence
+        (goto-char point-pos)
+        (when (and start
+                   (re-search-forward org-ai-block--markdown-end-re (or limit-end (point-max)) t))
+          (setq end (match-beginning 0))
+          (goto-char point-pos)
+          ;; do we inside owr block?
+          (when (and (re-search-forward org-ai-block--markdown-begin-re (or limit-end (point-max)) t)
+                     (< (match-end 0) end)
+                     (setq end nil)))))
+      ;; If point is inside fences, mark region
+      ;; (print (list point-pos start end))
+      (when (and start end (> point-pos start) (< point-pos end))
+        (set-mark start)
+        (print end)
+        (goto-char end)
+        (forward-line -1)
+        (end-of-line)
+        (activate-mark)
+        t)))
 ;;; provide
 (provide 'org-ai-block)
 ;;; org-ai-block.el ends here

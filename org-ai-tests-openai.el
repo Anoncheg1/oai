@@ -19,7 +19,7 @@ Stop it with `org-ai-openai-stop-url-request'.
       ))
   )
 
-;;; - For `org-ai--openai-get-token'
+;;; - For `org-ai--openai-get-token' (old)
 
 ;; (require 'org-ai) ;; Assuming the function is defined in org-ai.el
 
@@ -57,6 +57,57 @@ Stop it with `org-ai-openai-stop-url-request'.
                   :type 'error
                   :regexp "Please set `org-ai-api-creds-token' to your OpenAI API token or setup auth-source"))
     (fmakunbound 'org-ai--openai-get-token-auth-source))
+
+;;;
+;;; - For `org-ai--openai-get-token'
+;; Dummy function for auth-source behavior
+(defun org-ai--openai-get-token-auth-source (service) nil)
+
+(ert-deftest org-ai--openai-get-token/string ()
+  "Single string in `org-ai-api-creds-token` returns value."
+  (let ((org-ai-api-creds-token "tok123"))
+    (should (equal (org-ai--openai-get-token "foo") "tok123"))))
+
+(ert-deftest org-ai--openai-get-token/empty-string-error ()
+  "Empty string errors out."
+  (let ((org-ai-api-creds-token ""))
+    (should-error (org-ai--openai-get-token "foo")
+                  :type 'error)))
+
+(ert-deftest org-ai--openai-get-token/plist-string ()
+  "Plist with symbol key, single string."
+  (let ((org-ai-api-creds-token '(:foo "tokfoo")))
+    (should (equal (org-ai--openai-get-token "foo") "tokfoo"))))
+
+(ert-deftest org-ai--openai-get-token/plist-list-by-index ()
+  "Plist with key and list of strings, access by index."
+  (cl-labels ((org-ai--split-dash-number (s) (cons "foo" 1))) ;; fake service splitting
+    (let ((org-ai-api-creds-token '(:foo ("tok0" "tok1"))))
+      (should (equal (org-ai--openai-get-token "foo--1") "tok1")))))
+
+(ert-deftest org-ai--openai-get-token/plist-list-car ()
+  "Plist with key and list of strings, no index (get car)."
+  (let ((org-ai-api-creds-token '(:foo ("tok0" "tok1"))))
+    (should (equal (org-ai--openai-get-token "foo") "tok0"))))
+
+(ert-deftest org-ai--openai-get-token/plist-error-when-key-not-found ()
+  "Plist with missing key errors."
+  (let ((org-ai-api-creds-token '(:foo "tokfoo")))
+    (should-error (org-ai--openai-get-token "bar")
+                  :type 'error)))
+
+(ert-deftest org-ai--openai-get-token/plist-bad-config ()
+  "Plist with invalid structure signals error."
+  (let ((org-ai-api-creds-token '(:foo 1234)))
+    (should-error (org-ai--openai-get-token "foo")
+                  :type 'error)))
+
+(ert-deftest org-ai--openai-get-token/missing-errors ()
+  "Neither string, plist nor auth-source: signals error."
+  (let ((org-ai-api-creds-token nil))
+    (should-error (org-ai--openai-get-token "foo")
+                  :type 'error)))
+
 
 ;;; - org-ai--get-value-or-string
 (ert-deftest org-ai--get-value-or-string-test ()

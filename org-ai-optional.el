@@ -207,9 +207,6 @@ Uses `org-outline-regexp-bol' to match headers, respecting user-configured prefi
       (goto-char (point-min))
       (replace-regexp-in-region org-outline-regexp-bol "" (point-min) (point-max)))))
 
-
-(provide 'org-ai-optional)
-
 (defcustom org-ai-optional-fill-paragraph-functions
   (list
    'org-fill-paragraph)
@@ -253,7 +250,7 @@ Executed inside `save-excursion'."
                (line-end (line-end-position)))
            ;; (print (list "my/apply-to-region-lines aa" line-start line-end))
            (if (< line-start line-end)
-             (apply ,func line-start line-end ,@args)
+             (apply ,func line-start line-end (list ,@args))
              ;; else - skip emtpy line
            (forward-line 1)))))))
 
@@ -269,9 +266,13 @@ Ignoring code blocks that start with '```sometext' and end with '```'."
     (let ((element (org-ai-block-p)))
       (when (and element (string-equal "ai" (org-element-property :type element)))
         ;; Determine the boundaries of the content
-        (let ((beg (max (point-min) (org-element-contents-begin element))) ; first line of content
-              (end (min (point-max) (org-element-contents-end element)))
+        (let ((beg (org-element-contents-begin element)) ; first line of content
+              (end (org-element-contents-end element))
               block-start block-end)
+          ;; Content exist?
+          (if (or (not beg)
+                  (not end))
+              (error "Empty block"))
           ;; Ignore code blocks that start with "```sometext" and end with "```"
           (save-excursion
             (while (< beg end)
@@ -293,3 +294,6 @@ Ignoring code blocks that start with '```sometext' and end with '```'."
                 (setq beg end)))
             ;; (print "my/org-ai-fill-paragraph return t")
             t))))))
+;;; provide
+(provide 'org-ai-optional)
+;;; org-ai-optional.el ends here

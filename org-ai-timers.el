@@ -72,9 +72,11 @@ Indented for usage with `org-ai-block-get-header-marker'."
       (setf (alist-get key org-ai-timers--element-marker-variable-dict) value)))
 
 (defun org-ai-timers--remove-variable (value)
-  "Remove buffer."
+  "Remove marker.
+`equal' for markers compare buffer and positon, `eq' compare objects itself.
+We use `eq' here."
   (setq org-ai-timers--element-marker-variable-dict
-        ;; for buffer eq is ok
+        ;; eq compare objects itself
         (rassq-delete-all value org-ai-timers--element-marker-variable-dict)))
 
 (defun org-ai-timers--remove-key (key)
@@ -97,7 +99,7 @@ Indented for usage with `org-ai-block-get-header-marker'."
   (seq-uniq (mapcar #'cdr org-ai-timers--element-marker-variable-dict)))
 
 (defun org-ai-timers--get-all-keys ()
-  "Get all url-buffers."
+  "Get all live url-buffers."
   (seq-uniq
    (mapcar #'cdr (seq-filter (lambda (entry)
                                (buffer-live-p (car entry)))
@@ -135,7 +137,7 @@ Called in
     (setq org-ai-timers--global-progress-timer-remaining-ticks 0)
     (org-ai--debug "org-ai-timers--stop-global-progress-reporter" org-ai-timers--global-progress-timer-remaining-ticks)))
 
-(defun org-ai-timers--update-global-progress-reporter (&optional failed)
+(defun org-ai-timers--update-global-progress-reporter ()
   "Count url-buffers and stop reporter if it is empty.
 Called from
 `org-ai-openai-stop-url-request',
@@ -146,8 +148,10 @@ Called from
                  (org-ai-timers--get-all-keys))
   (let ((count (length (org-ai-timers--get-all-keys))))
     (org-ai-update-mode-line count)
-    (when (eql count 0)
-      (org-ai-timers--stop-global-progress-reporter failed))))
+    ;; (when (eql count 0)
+    ;;   (org-ai-timers--stop-global-progress-reporter failed)
+    ;;   )
+    ))
 
 (defun org-ai-timers--interrupt-all-requests (interrupt-request-func &optional failed)
   "Interrup all url requests and stop global timer.
@@ -163,6 +167,7 @@ Called from
   (setq org-ai-timers--element-marker-variable-dict nil)
   ;; (org-ai-timers--clear-variables)
   ;; stop global timer
+  (org-ai-timers--update-global-progress-reporter)
   (org-ai-timers--stop-global-progress-reporter failed))
 
 ;; (defun org-ai-timers--stop-current-timer (url-buffer &optional failed)
@@ -249,7 +254,7 @@ Called from
 
 
 ;;; - Main - constructor
-(defun org-ai-timers--progress-reporter-run (interrupt-request-func)
+(defun org-ai-timers--progress-reporter-run (interrupt-request-func &optional duration)
   "Start or update progress notification.
 1) Save pair (HEADER-MARKER->URL-BUFFER)
 2) INTERRUPT-REQUEST-FUNC - When timer expired kill all by calling for every buffer.
@@ -270,7 +275,7 @@ Set:
 
   ;; - precalculate ticks based on duration, 25/ 0.2 = 125 ticks
   (setq org-ai-timers--global-progress-timer-remaining-ticks
-        (fround (/ org-ai-timers-duration org-ai-timers-echo-gap)))
+        (fround (/ (or duration org-ai-timers-duration) org-ai-timers-echo-gap)))
 
   (org-ai--debug "org-ai-timers--progress-reporter-run1")
   ;; - if exist, add remaining ticks

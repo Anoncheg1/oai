@@ -118,7 +118,8 @@ You need to specify if you do not store the token in
 `auth-sources'.  You can retrieve it at
 https://platform.openai.com/account/api-keys."
   :type '(choice (string :tag "String value")
-                  (plist :key-type symbol :value-type string :tag "Plist with symbol key and string value"))
+                  (plist :key-type symbol :value-type (choice (string :tag "Plist with symbol key and string value")
+                                                              (list :tag "Plist with symbol key and list of string values"))))
   :type 'string
   :group 'org-ai)
 
@@ -359,6 +360,9 @@ Heavy to execute."
           (cdr (split-string bt "\n" t)))
          caller))
 
+(defvar org-ai--debug-filter nil
+  "Output only strings that contains this.")
+
 (defun org-ai--debug (&rest args)
   "If firt argument of ARGS is a stringwith %s than behave like format.
 Otherwise format every to string and concatenate."
@@ -381,7 +385,8 @@ Otherwise format every to string and concatenate."
                                '((direction . left)
                                  (window . new)
                                  )))
-                            (select-window current-window))))
+                            (select-window current-window)))
+             result-string)
 
         (with-current-buffer bu
           ;; - move point to  to bottom
@@ -405,18 +410,22 @@ Otherwise format every to string and concatenate."
           (save-match-data
             (if (and (equal (type-of (car args)) 'string)
                      (string-match "%s" (car args)))
-                (progn
-                  (insert (apply 'format (car args) (cdr args)))
-                  (newline))
+                (setq result-string (concat (apply 'format (car args) (cdr args)) "\n"))
 
               ;; else
-              (insert (apply #'concat (mapcar (lambda (arg)
+              (setq result-string (apply #'concat (mapcar (lambda (arg)
                                                 (if (equal (type-of arg) 'string)
                                                     (format "%s\n" arg)
                                                   (concat (prin1-to-string arg) "\n"))
                                                 ) args)))
-              ;; (newline))
-              )))))))
+              )
+            (if org-ai--debug-filter
+                (when (string-match-p (regexp-quote org-ai--debug-filter) result-string)
+                    (insert result-string))
+              ;; else
+              (insert result-string))
+
+            ))))))
 
 ;; (org-ai--debug "test %s" 2)
 ;; (org-ai--debug "test" 2 3 "sd")
@@ -457,56 +466,73 @@ Argument SOURCE-BUF url-http response buffer."
     (unless (member model org-ai-chat-models)
       (message "Model '%s' is not in the list of available models. Maybe this is because of a typo or maybe we haven't yet added it to the list. To disable this message add (add-to-list 'org-ai-chat-models \"%s\") to your init file." model model))))
 
-;; (defmacro org-ai--read-service-name (name)
-;;   "Map a service NAME such as 'openai' to a valid `org-ai-service' symbol."
-;;   ,(intern-soft ,name))
+(defun org-ai--split-dash-number (str)
+  (pcase-let ((`(,a ,b) (split-string str "--")))
+    (and b (string-match-p "\\`[0-9]+\\'" b)
+         (cons a (string-to-number b)))))
 
-;; (defun org-ai--service-of-model (model)
-;;   "Return the service of the model.
-;; `MODEL' is the model name."
-;;   (cond
-;;    ((string-prefix-p "gpt-" model) 'openai)
-;;    ((string-prefix-p "chatgpt-" model) 'openai)
-;;    ((string-prefix-p "o1" model) 'openai)
-;;    ((string-prefix-p "o3" model) 'openai)
-;;    ((string-prefix-p "o4" model) 'openai)
-;;    ((string-prefix-p "claude" model) 'anthropic)
-;;    ((string-prefix-p "gemini" model) 'google)
-;;    ((string-prefix-p "deepseek" model) 'deepseek)
-;;    (t nil)))
+;; (org-ai--split-dash-number nil)         ;; error
+;; (org-ai--split-dash-number "foo")       ;; nil
+;; (org-ai--split-dash-number "foo--")     ;; nil
+;; (org-ai--split-dash-number "foo--23")   ;; ("foo" . 23)
+;; (org-ai--split-dash-number "--1")       ;; ("" . 1)
+;; (org-ai--split-dash-number "a--b")      ;; nil
+;; (org-ai--split-dash-number "foo--2.4")  ;; nil
+
+(defun org-ai--openai-service-clear-dashes (service)
+  "Remove --N part from SERVICE if it have such.
+SERVICE is a string."
+  (let ((spl (org-ai--split-dash-number service)))
+    (if spl (car spl)
+      service)))
+
+(defmacro org-ai--get-value-or-string (var key)
+  "Retrieve value from VAR using KEY if VAR is a plist, or return VAR if it's a string.
+VAR is the variable name to evaluate.
+KEY is a string (without :) or keyword (leading with :) used as a key if
+VAR is a plist."
+  `(cond ((plistp ,var)
+          (plist-get ,var (if (stringp ,key)
+                              (intern (concat ":" ,key))
+                            ,key)))
+          ((stringp ,var)
+           ,var)
+          (t nil)))
+
 
 (defun org-ai--openai-get-token (service)
   "Try to get the openai token.
 Either from `org-ai-api-creds-token' or from auth-source.
 Optional argument SERVICE of token."
-  (cond ((and (stringp org-ai-api-creds-token)
-              (not (string-empty-p org-ai-api-creds-token)))
-         org-ai-api-creds-token)
-        ((plistp org-ai-api-creds-token)
-         (or (plist-get org-ai-api-creds-token
-                        ;; convert symbol to keyword
-                        (intern (concat ":"
-                                        (if (symbolp service)
-                                            (symbol-name service)
-                                          ;; else
-                                          service))))
-             (error "Token not found in defined plist `org-ai-api-creds-token'.")))
-        ((and
-          ;; org-ai-use-auth-source
-          (org-ai--openai-get-token-auth-source service)))
-        (t
-         (error "Please set `org-ai-api-creds-token' to your OpenAI API token or setup auth-source (see org-ai readme)"))))
+  (cond
+   ;; one token
+   ((and (stringp org-ai-api-creds-token)
+         (not (string-empty-p org-ai-api-creds-token)))
+    org-ai-api-creds-token)
+   ;; several tokens
+   ((plistp org-ai-api-creds-token)
+    ;; if service is "openai--N"
+    (let* ((spl (if (stringp service) (org-ai--split-dash-number service)))
+           (service-number (if spl (cdr spl)))
+           (service (if spl (car spl) service))
+           tokens)
+      ;; find service in plist
+      (setq tokens (org-ai--get-value-or-string org-ai-api-creds-token service))
+      (cond ((stringp tokens) tokens)
+            ;; servie “foo--0” we get first from tokens
+            ((and spl (listp tokens) service-number)
+             (nth service-number tokens))
+            ;; service have “foo”, we just get first from tokens.
+            ((and (listp tokens) (not spl) (stringp service))
+             (car tokens))
+            (t
+             (error "Token not found in defined plist `org-ai-api-creds-token'.")))))
+   ((and
+     ;; org-ai-use-auth-source
+     (org-ai--openai-get-token-auth-source service)))
+   (t
+    (error "Please set `org-ai-api-creds-token' to your OpenAI API token or setup auth-source (see org-ai readme)"))))
 
-(defmacro org-ai--get-value-or-string (var key)
-  "Retrieve value from VAR using KEY if VAR is a plist, or return VAR if it's a string.
-VAR is the variable name to evaluate.
-KEY is a string used as a key (converted to key symbol with : character)
-if VAR is a plist."
-  `(cond ((plistp ,var)
-          (plist-get ,var (intern (concat ":" ,key))))
-         ((stringp ,var)
-          ,var)
-         (t nil)))
 
 ;; (defun org-ai--openai-get-chat-model (service)
 ;;   "Allow to set default model as one string or per service."
@@ -532,7 +558,9 @@ if VAR is a plist."
 (defun org-ai--openai-get-token-auth-source (&optional service)
   "Retrieves the authentication token for the OpenAI SERVICE using auth-source."
   (require 'auth-source)
-  (let* ((service (or service org-ai-service))
+  (let* ((service (or (if service
+                          (org-ai--openai-service-clear-dashes service))
+                      org-ai-service))
          ;; azure-openai - special case
          (endpoint (if (eql endpoint 'azure-openai)
                        (org-ai--strip-api-url org-ai-azure-openai-api-base)
@@ -542,26 +570,28 @@ if VAR is a plist."
         (auth-source-pick-first-password :host endpoint :login "org-ai"))))
 
 (defcustom org-ai-endpoints
-  '((perplexity.ai	"https://api.perplexity.ai/chat/completions")
-    (deepseek		"https://api.deepseek.com/v1/chat/completions")
-    (anthropic		"https://api.anthropic.com/v1/messages")
-    (google		"https://generativelanguage.googleapis.com/v1beta/openai/chat/completions")
-    (together		"https://api.together.xyz/v1/chat/completions")
-    (github		"https://models.github.ai/inference/chat/completions")
+  '(:perplexity.ai	"https://api.perplexity.ai/chat/completions"
+    :deepseek		"https://api.deepseek.com/v1/chat/completions"
+    :anthropic		"https://api.anthropic.com/v1/messages"
+    :google		"https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+    :together		"https://api.together.xyz/v1/chat/completions"
+    :github		"https://models.github.ai/inference/chat/completions"
     )
   "Endpoints for services.
   This is a not ordered list of key-value pairs in format of List of
   lists: (SYMBOL VALUE-STRING). Used for POST HTTP request to service."
-  :type '(alist :key-type (symbol :tag "Service")
-                :value-type (string :tag "Endpoint URL")
-  :group 'org-ai))
+  :type '(plist :key-type symbol :value-type string
+                :tag "Plist with Service as a symbol key and Endpoint URL as a string value")
+         :group 'org-ai)
 
 
 (defun org-ai--get-endpoint (messages &optional service)
   "Determine the correct endpoint based on the service and
 whether messages are provided."
-  (let* ((service (or service org-ai-service))
-        (endpoint (car (alist-get service org-ai-endpoints))))
+  (let* ((service (or (if service
+                          (org-ai--openai-service-clear-dashes service))
+                      (org-ai-service)))
+         (endpoint (org-ai--get-value-or-string org-ai-endpoints service)))
     (cond
      (endpoint endpoint)
      ((eq service 'azure-openai)
@@ -573,7 +603,9 @@ whether messages are provided."
 
 (defun org-ai--get-headers (service)
   "Determine the correct headers based on the service."
-  (let ((service (or service org-ai-service)))
+  (let ((service (or (if service
+                          (org-ai--openai-service-clear-dashes service))
+                     org-ai-service)))
     `(("Content-Type" . "application/json")
       ,@(cond
         ((eq service 'azure-openai)
@@ -616,7 +648,7 @@ whether messages are provided."
   "Compose API request from data and start a server-sent event stream.
 Call `org-ai-api-request' function as a next step.
 Called from `org-ai-interface-step1' in main file.
-`REQ-TYPE' symbol - is completion or chat mostly.
+`REQ-TYPE' symbol - is completion or chat mostly. Set `org-ai-block--get-request-type'.
 `ELEMENT' org-element - is ai block, should be converted to market at once.
 `SYS-PROMPT' string - first system instruction as a string.
 `SYS-PROMPT-FOR-ALL-MESSAGES' from `org-ai-default-inject-sys-prompt-for-all-messages' variable.
@@ -1066,8 +1098,10 @@ For not stream url return event and hook after-change-functions
     ;; - regex check
     (org-ai--check-model model endpoint) ; not empty and if "api.openai.com" or "openai.azure.com"
 
-    (org-ai--debug "org-ai-api-request endpoint:" endpoint (type-of endpoint)
-                   "request-data:" (org-ai--prettify-json-string url-request-data))
+    (org-ai--debug "org-ai-api-request endpoint:" endpoint (type-of endpoint))
+    (org-ai--debug "org-ai-api-request headers:" url-request-extra-headers)
+    (org-ai--debug "org-ai-api-request request-data:" (org-ai--prettify-json-string url-request-data))
+
 
     (org-ai--debug "Main request before, that return a \"urllib buffer\".")
     (let ((url-request-buffer
@@ -1142,38 +1176,38 @@ Call callback with nil or result of `org-ai--normalize-response' of response."
             endpoint
             (lambda (_events)
               (org-ai--debug-urllib (current-buffer))
-              (unless (org-ai--maybe-show-openai-request-error) ; TODO: change to RESULT by global customizable option
-                ;; - read from url-buffer
+              (if (org-ai--maybe-show-openai-request-error) ; TODO: change to RESULT by global customizable option
+                  (funcall callback nil) ; signal error to callback
+                ;; else - read from url-buffer
                 (when (and (boundp 'url-http-end-of-headers) url-http-end-of-headers)
                   (goto-char url-http-end-of-headers)
                   (let ((json-object-type 'plist)
                         (json-key-type 'symbol)
                         (json-array-type 'vector))
                     (condition-case _err
-                        ;;   (print (list "HERE5" (current-buffer) (point) (point-max)))
-                        ;;   ;; ;; (#s(org-ai--response role "assistant") #s(org-ai--response text "It seems ") #s(org-ai--response stop "length"))
-
-                        (let* ((res1 (buffer-substring-no-properties (point) (point-max)))
-                              (res2 (json-read-from-string res1))
-                              (res3 (org-ai--normalize-response res2))
-                              (res4 (nth 1 res3))
-                              (res5 (org-ai--response-payload res4))
-                              (res (decode-coding-string res5 'utf-8))
-                              )
-                          (print (list "HERE6" res3 ))
-                          (print (list "HERE6h7" callback))
-                          ;; to prevent catching error to here
-                          (run-at-time 0 nil callback res)
-                          )
-                        ;; (funcall callback (decode-coding-string (org-ai--response-payload (nth 1
-                        ;;                                                                        (org-ai--normalize-response
-                        ;;                                                                         (json-read-from-string
-                        ;;                                                                          (buffer-substring-no-properties (point) (point-max))))))
-                        ;;                                         'utf-8))
+                        ;; (let* ((res1 (buffer-substring-no-properties (point) (point-max)))
+                        ;;       (res2 (json-read-from-string res1))
+                        ;;       (res3 (org-ai--normalize-response res2))
+                        ;;       (res4 (nth 1 res3))
+                        ;;       (res5 (org-ai--response-payload res4))
+                        ;;       (res (decode-coding-string res5 'utf-8))
+                        ;;       )
+                        ;;   (print (list "HERE6" res3 ))
+                        ;;   (print (list "HERE6h7" callback))
+                        ;;   ;; to prevent catching error to here
+                        ;;   (run-at-time 0 nil callback res)
+                        ;;   )
+                        ;; (message "no HERE7 error")
+                        (funcall callback (decode-coding-string (org-ai--response-payload (nth 1
+                                                                                               (org-ai--normalize-response
+                                                                                                (json-read-from-string
+                                                                                                 (buffer-substring-no-properties (point) (point-max))))))
+                                                                'utf-8))
                       (error
-                       (message "HERE7 error"))
-                       ;; (funcall callback nil)
-                       )))))))
+                       nil
+                       ;; (message "HERE7 error")
+                       ;; (funcall callback nil) ; signal error to callback
+                       ))))))))
            ;; (timeout (or timeout org-ai-timers-duration))
            ;; (waiter (run-with-timer 3 0 (lambda(b) (print b)) b))
           )
@@ -1202,60 +1236,106 @@ Call callback with nil or result of `org-ai--normalize-response' of response."
 ;;                            :frequency-penalty frequency-penalty
 ;;                            :presence-penalty presence-penalty)))
 
-(defvar org-ai-api-request-llm-retries-local-url-buffer  nil)
+(defvar org-ai-api-request-llm-retries-local-url-buffer  nil
+  "Save url-buffer in temp buffer in which timer have been started.")
 (make-variable-buffer-local 'org-ai-api-request-llm-retries-local-url-buffer)
 
 (cl-defun org-ai-api-request-llm-retries (service model timeout callback &optional &key retries prompt messages header-marker max-tokens temperature top-p frequency-penalty presence-penalty)
   "Add TIMEOUT and RETRIES parameters to `org-ai-api-request-llm' functiion.
-Timer function accept left attempts count.
 Timer function restart requst and restart timer with attempts-1.
-In callback we add cancel timer function."
+In callback we add cancel timer function.
+We save and cancel time only in callback.
+TIMER is time to wait for one request."
   (org-ai--debug "org-ai-api-request-llm-retries1 timeout %s" timeout)
   (let ((cb (current-buffer)))
-    (with-temp-buffer ; to separate variable `org-ai-api-request-llm-retries-local-url-buffer'
-      (org-ai--debug "org-ai-api-request-llm-retries12")
-      (let* ((left-retries (if retries (1- retries)
-                             ;; else
-                             3))
-             (timer (run-with-timer timeout
-                                    0
-                                    (lambda ()
-                                      (org-ai--debug "in org-ai-api-request-llm-retries timer %s" left-retries)
-                                      ;; - kill old
-                                      (when (buffer-live-p org-ai-api-request-llm-retries-local-url-buffer)
-                                        (org-ai-timers--interrupt-current-request org-ai-api-request-llm-retries-local-url-buffer #'org-ai-openai--interrupt-url-request))
-                                      ;; - restart
-                                      (if (> left-retries 0)
-                                          (org-ai-api-request-llm-retries service model timeout callback
-                                                                          left-retries prompt messages header-marker max-tokens temperature top-p frequency-penalty presence-penalty))
-                                      ))))
-        (org-ai--debug "org-ai-api-request-llm-retries2")
-        (setq org-ai-api-request-llm-retries-local-url-buffer
-              (org-ai-api-request-llm service model
-                                      (lambda (result-llm-retries)
-                                        (org-ai--debug "org-ai-api-request-llm callback1, timer, result:" timer result-llm-retries)
-                                        (if timer
-                                            (cancel-timer timer))
-                                        (org-ai--debug "org-ai-api-request-llm  callback2")
-                                        ;; (with-current-buffer cb
-                                        (org-ai--debug "org-ai-api-request-llm  callback3 %s %s" callback result-llm-retries)
-                                        (run-at-time 0 nil callback result-llm-retries)
-                                        ;; (funcall callback result-llm-retries)
-                                        (org-ai--debug "org-ai-api-request-llm  callback4")
-                                        ;; )
-                                      )
-                                      :prompt prompt
-                                      :messages  messages
-                                      :max-tokens max-tokens
-                                      :temperature temperature
-                                      :top-p top-p
-                                      :frequency-penalty frequency-penalty
-                                      :presence-penalty presence-penalty))
-        ;; save url-buffer
-        (org-ai-timers--set org-ai-api-request-llm-retries-local-url-buffer
-                            header-marker)
-        (org-ai--debug "org-ai-api-request-llm-retries3" org-ai-timers--element-marker-variable-dict org-ai-api-request-llm-retries-local-url-buffer)
-        ))))
+    (if (or (and retries (> retries 0)) ; just in case
+            (not retries))
+        (with-temp-buffer ; to separate variable `org-ai-api-request-llm-retries-local-url-buffer'
+          (org-ai--debug "org-ai-api-request-llm-retries12")
+          (let* ((left-retries (if retries (1- retries) 3))
+                 ;; run timer in temp buffer
+                 (timer (run-with-timer timeout
+                                        0
+                                        (lambda ()
+                                          (org-ai--debug "in org-ai-api-request-llm-retries timer: left-retries: %s buffer-life: %s buffer:" left-retries (buffer-live-p org-ai-api-request-llm-retries-local-url-buffer) org-ai-api-request-llm-retries-local-url-buffer)
+                                          ;; - kill old and restart only if request was hanging
+                                          (when (buffer-live-p org-ai-api-request-llm-retries-local-url-buffer)
+                                            (org-ai-timers--interrupt-current-request org-ai-api-request-llm-retries-local-url-buffer #'org-ai-openai--interrupt-url-request)
+                                            ;; - restart
+                                            (if (> left-retries 0)
+                                                (org-ai-api-request-llm-retries service model timeout callback
+                                                                                :retries left-retries
+                                                                                :messages messages
+                                                                                :max-tokens max-tokens
+                                                                                :header-marker header-marker
+                                                                                :temperature temperature
+                                                                                :top-p top-p
+                                                                                :frequency-penalty frequency-penalty
+                                                                                :presence-penalty presence-penalty)
+                                              ;; else - failed
+                                              ;; (org-ai-timers--remove-variable header-marker) ;?
+                                              (run-at-time 0 nil callback nil)
+                                              (with-current-buffer (marker-buffer header-marker)
+                                                  (save-excursion
+                                                    (goto-char header-marker)
+                                                    (org-ai-insert-result "Failed")))
+                                              (org-ai-timers--update-global-progress-reporter)
+                                              ))))))
+            (org-ai--debug "org-ai-api-request-llm-retries2")
+            ;; inside temp buffer we set variable
+            (setq org-ai-api-request-llm-retries-local-url-buffer
+                  (org-ai-api-request-llm service model
+                                          (lambda (result-llm)
+                                            (org-ai--debug "org-ai-api-request-llm callback1, timer, result:" timer result-llm)
+                                            (if timer
+                                                (cancel-timer timer))
+                                            (org-ai--debug "org-ai-api-request-llm  callback2")
+                                            ;; (with-current-buffer cb
+                                            (org-ai--debug "org-ai-api-request-llm  callback3 %s %s" callback result-llm)
+                                            (if result-llm
+                                                (progn
+                                                  (org-ai--debug "org-ai-api-request-llm here")
+                                                  (run-at-time 0 nil callback result-llm))
+                                              ;; else - error - retry
+                                              (if (> left-retries 0)
+                                                  (progn
+                                                    (org-ai--debug "org-ai-api-request-llm here2")
+                                                    ;; retrie after 3 sec
+                                                  (run-at-time 3 nil (lambda () (org-ai-api-request-llm-retries service model timeout callback
+                                                                                  :retries left-retries
+                                                                                  :messages messages
+                                                                                  :max-tokens max-tokens
+                                                                                  :header-marker header-marker
+                                                                                  :temperature temperature
+                                                                                  :top-p top-p
+                                                                                  :frequency-penalty frequency-penalty
+                                                                                  :presence-penalty presence-penalty))))
+                                                ;; else - failed
+                                                (org-ai--debug "org-ai-api-request-llm failed")
+                                                (run-at-time 0 nil callback nil)
+                                                (with-current-buffer (marker-buffer header-marker)
+                                                  (save-excursion
+                                                    (goto-char header-marker)
+                                                    (org-ai-insert-result "Failed")))
+                                                (org-ai-timers--update-global-progress-reporter)
+                                                ))
+
+                                            ;; (funcall callback result-llm)
+                                            (org-ai--debug "org-ai-api-request-llm  callback4")
+                                            ;; )
+                                            )
+                                          :prompt prompt
+                                          :messages  messages
+                                          :max-tokens max-tokens
+                                          :temperature temperature
+                                          :top-p top-p
+                                          :frequency-penalty frequency-penalty
+                                          :presence-penalty presence-penalty))
+            ;; save url-buffer
+            (org-ai-timers--set org-ai-api-request-llm-retries-local-url-buffer
+                                header-marker)
+            (org-ai--debug "org-ai-api-request-llm-retries3" org-ai-timers--element-marker-variable-dict org-ai-api-request-llm-retries-local-url-buffer)
+            )))))
 
 (defun org-ai--maybe-show-openai-request-error ()
   "If the API request returned an error, show it.
