@@ -134,7 +134,7 @@ Read Org parameters and send the text content to next step."
          (sys-prompt (or (org-entry-get-with-inheritance "SYS") ; org
                          (org-ai-block--get-sys :info info ; org-ai-block.el
                                           :default org-ai-default-chat-system-prompt)))) ; org-ai-openai.el variable
-    (org-ai--debug info)
+    ;; (org-ai--debug info)
     ;; - Process Org params and call agent
     (org-ai-block--let-params info
                               ;; format: (variable optional-default type)
@@ -173,7 +173,12 @@ This is what will be sent to the api.  ELEMENT is the org-ai block.
 Like `org-babel-expand-src-block'."
   (interactive)
   (let* ((element (or element (org-ai-block-p))) ; org-ai-block.el
-         (expanded (org-ai-block-get-content element))) ; org-ai-block.el
+         (expanded (string-trim
+                    (org-ai-block-get-content element) ; org-ai-block.el
+                    ))
+         (expanded (org-ai-openai--collect-chat-messages expanded))
+         (expanded (modify-last-user-content expanded #'org-ai--tags))
+         (expanded (org-ai-openai--stringify-chat-messages expanded)))
     (if (called-interactively-p 'any)
         (let ((buf (get-buffer-create "*Org-Ai Preview*")))
           (with-help-window buf (with-current-buffer buf

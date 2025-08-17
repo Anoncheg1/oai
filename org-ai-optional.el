@@ -199,6 +199,7 @@ Does not remove an empty line if the line immediately following it contains '[ME
 
 (defun org-ai-optional-remove-headers (beg-pos end-pos)
   "Remove Org mode header prefixes between BEG-POS and END-POS in the current buffer.
+LLMs sometimes add ** header ** to text, this break Org.
 Uses `org-outline-regexp-bol' to match headers, respecting user-configured prefixes."
   (interactive "r")
   (save-excursion

@@ -63,6 +63,8 @@ Used for :aggregator."
 
 (defun async-plist-get (plist key)
   "Get value by KEY from PLIST.
+`plist-get' don't work if list have  one missed values or keys, it don't
+resplect :keywords, only order or key-value.
 Used for :aggregator."
   (if (memq key plist)
       (let ((value (cadr (memq key plist))))

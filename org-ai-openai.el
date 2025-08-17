@@ -579,7 +579,8 @@ Optional argument SERVICE of token."
     )
   "Endpoints for services.
   This is a not ordered list of key-value pairs in format of List of
-  lists: (SYMBOL VALUE-STRING). Used for POST HTTP request to service."
+  lists: (SYMBOL VALUE-STRING). Used for POST HTTP request to service.
+Use: (plist-put org-ai-endpoints :my \"http\")."
   :type '(plist :key-type symbol :value-type string
                 :tag "Plist with Service as a symbol key and Endpoint URL as a string value")
          :group 'org-ai)
@@ -603,21 +604,24 @@ whether messages are provided."
 
 (defun org-ai--get-headers (service)
   "Determine the correct headers based on the service."
-  (let ((service (or (if service
-                          (org-ai--openai-service-clear-dashes service))
-                     org-ai-service)))
+  (let ((serv (if service
+                  (org-ai--openai-service-clear-dashes service)
+              org-ai-service))
+        (token (if service
+                   (org-ai--openai-get-token service)
+                 (org-ai--openai-get-token serv))))
     `(("Content-Type" . "application/json")
       ,@(cond
         ((eq service 'azure-openai)
-         `(("api-key" . ,(org-ai--openai-get-token service))))
+         `(("api-key" . ,token)))
         ((eq service 'anthropic)
-         `(("x-api-key" . ,(org-ai--openai-get-token service))
+         `(("x-api-key" . ,token)
            ("anthropic-version" . ,org-ai-anthropic-api-version)))
         ((eq service 'google)
          `(("Accept-Encoding" . "identity")
-           ("Authorization" . ,(encode-coding-string (string-join `("Bearer" ,(org-ai--openai-get-token service)) " ") 'utf-8))))
+           ("Authorization" . ,(encode-coding-string (string-join `("Bearer" ,token) " ") 'utf-8))))
         (t
-         `(("Authorization" . ,(encode-coding-string (string-join `("Bearer" ,(org-ai--openai-get-token service)) " ") 'utf-8))))))))
+         `(("Authorization" . ,(encode-coding-string (string-join `("Bearer" ,token) " ") 'utf-8))))))))
 
 
 (defun org-ai-openai--get-lenght-recomendation (max-tokens)
@@ -641,9 +645,184 @@ whether messages are provided."
            (format "Do final answer with %d paragraph or %d pages limit length, but not strict." (/ max-tokens 200) (ceiling (/ max-tokens 600.0)))))))
 
 ;;; - Main
-;; org-ai-stream-completion - old
 
-;; &optional &key prompt messages context model max-tokens temperature top-p frequency-penalty presence-penalty service stream
+
+(defun find-last-user-index (vec)
+  "Return the index of the last element in VEC whose :role is 'user, or nil."
+  (let ((i (1- (length vec)))
+        idx)
+    (while (and (>= i 0) (not idx))
+      (let ((elt (aref vec i)))
+        (when (and (listp elt)
+                   (eq (plist-get elt :role) 'user))
+          (setq idx i)))
+      (setq i (1- i)))
+    idx))
+
+(defun modify-last-user-content (vec new-content)
+  "Return new vector based on VEC, replacing last 'user :content with NEW-CONTENT
+(string or function of old content). Uses `find-last-user-index`."
+  (let ((idx (find-last-user-index vec))
+        (newvec (copy-sequence vec)))
+    (when idx
+      (let* ((elt (aref newvec idx))
+             (old-content (plist-get elt :content))
+             (rep-content (if (functionp new-content)
+                              (funcall new-content old-content)
+                            new-content))
+             (new-elt (plist-put (copy-sequence elt) :content rep-content)))
+        (aset newvec idx new-elt)))
+    newvec))
+
+(cl-assert
+ (equal (modify-last-user-content
+         (vector (list :role 'system :content "foo")
+                 (list :role 'user :content "How to make coffe1?")
+                 (list :role 'assistant :content "IDK.")
+                 (list :role 'user :content "How to make coffe2?")
+                 (list :role 'system :content "other"))
+         (lambda (x) (concat x " wtf")))
+        '[(:role system :content "foo")
+          (:role user :content "How to make coffe1?")
+          (:role assistant :content "IDK.")
+          (:role user :content "How to make coffe2? wtf")
+          (:role system :content "other")]))
+
+(defun replace-last-regex-smart (string regexp replacement)
+  "Replace the last match of REGEXP in STRING with REPLACEMENT,
+preserving any extra captured groups."
+  (let ((pos 0)
+        (last-pos nil)
+        (last-end nil)
+        (last-group ""))
+    (while (and pos
+                (setq pos (string-match regexp string pos)))
+      (setq last-pos pos)
+      (setq last-end (match-end 0))
+      (setq last-group (match-string 1 string))
+      (setq pos (1+ pos)))
+    (if last-pos
+        (concat (substring string 0 last-pos)
+                replacement
+                last-group
+                (substring string last-end))
+      string)))
+
+(cl-assert
+ (equal (replace-last-regex-smart "asdasd@Backtraceasdasdasd" "@Backtrace" "111")
+        "asdasd111asdasdasd"))
+
+
+(defvar org-ai--tags-regexes '(:backtrace "@Backtrace`?\\([^a-zA-Z]\\|$\\)"
+                               :path "@\\(\\.\\.?/\\|\\.\\.?\\\\\\|\\.\\.?\\|/\\|\\\\\\|[A-Za-z]:\\\\\\)[a-zA-Z0-9_./\\\\-]*"
+                                          ))
+
+(cl-assert
+ (equal (let ((regex (plist-get org-ai--tags-regexes :backtrace)))
+          (replace-last-regex-smart
+           "foo `@Backtrace` bar `@Backtrace `@Backtrace`X"
+           regex
+           "REPLACED"))
+        "foo `@Backtrace` bar `@Backtrace `REPLACED`X"))
+(cl-assert
+ (equal (let ((regex (plist-get org-ai--tags-regexes :backtrace)))
+          (replace-last-regex-smart
+           "foo `@Backtrace` bar `@Backtrace `@BacktraceX"
+           regex
+           "REPLACED"))
+        "foo `@Backtrace` bar `REPLACED `@BacktraceX"))
+
+(cl-assert
+ (equal (let ((regex (plist-get org-ai--tags-regexes :backtrace)))
+          (replace-last-regex-smart "foo `@.` bar " (plist-get org-ai--tags-regexes :path) "REPLACED"))
+        "foo `REPLACED.` bar "))
+
+
+(cl-assert
+ (let ((regex (plist-get org-ai--tags-regexes :path)))
+  (equal (mapcar (lambda (s)
+                   (when (string-match regex s)
+                     (substring s (match-beginning 0) (match-end 0))))
+                 '("@/file-s_s"
+                   "@/file.t_xt"
+                   "@./file.txt"
+                   "@/some/path/file.txt"
+                   "@C:\\some\\file.txt"
+                   "@L:\\folder\\file.txt"
+                   "@\\network\\share"
+                   "@.\\windowsfile"
+                   "@/file/"
+                   "@/file.txt/"
+                   "@./file.txt/"
+                   "@/some/path/file.txt/"
+                   "@C:\\some\\file.txt\\"
+                   "@L:\\folder\\file.txt\\"
+                   "@\\network\\share\\"
+                   "@.\\windowsfile\\"
+                   "@Backtrace"
+                   "@not/a/path"
+                   "@Backtrace"
+                   "@not/a/path"
+                   "@not/a/path/"
+                   "@../right"
+                   "@../right/"
+                   "@.."
+                   "@."
+                   "@/"))
+         '("@/file-s_s" "@/file.t_xt" "@./file.txt" "@/some/path/file.txt" "@C:\\some\\file.txt" "@L:\\folder\\file.txt" "@\\network\\share" "@.\\windowsfile" "@/file/" "@/file.txt/" "@./file.txt/" "@/some/path/file.txt/" "@C:\\some\\file.txt\\" "@L:\\folder\\file.txt\\" "@\\network\\share\\" "@.\\windowsfile\\" nil nil nil nil nil "@../right" "@../right/" "@.." "@." "@/"))))
+
+(defun get-backtrace-buffer-string ()
+  "Return the contents of the *Backtrace* buffer as a string, or nil if it does not exist."
+  (let ((buf (get-buffer "*Backtrace*")))
+    (when buf
+      (with-current-buffer buf
+        (string-trim (substring-no-properties (buffer-string)))))))
+
+(defun take-n-lines (string n)
+  "Return a string with the first N lines from STRING.
+If N exceeds the number of lines, return all lines. If N <= 0, return an empty string."
+  (let* ((lines (split-string string "\n"))
+         (lines-to-keep (cl-subseq lines 0 (min (max 0 n) (length lines)))))
+    (mapconcat #'identity lines-to-keep "\n")))
+
+;; (take-n-lines "a\nb\nc\nd" 2)
+;; (take-n-lines "a\nb\nc\nd" 4)
+;; (take-n-lines "a\nb\nc" 10)
+;; (take-n-lines "a\nb\nc" 0) ;; ""
+;; (take-n-lines "a\nb\nc" -3) ;; ""
+;; (take-n-lines "" 4) ;; ""
+;; (take-n-lines "x\ny\nz\n" 2)
+;; (take-n-lines nil 2) ;; error
+
+(defvar org-ai--tags-backtrace-max-lines 12)
+
+(defun org-ai--tags (string)
+  "Replace links in STRING with their targets.
+TODO: fix when @Backtrace or @path surounded by (`) character."
+  (let ((backtrace-re (plist-get org-ai--tags-regexes :backtrace))
+        (path-re (plist-get org-ai--tags-regexes :path)))
+    ;;return
+    (cond ((string-match backtrace-re string)
+           (if-let* ((bt (get-backtrace-buffer-string))
+                     (bt (take-n-lines bt org-ai--tags-backtrace-max-lines))
+                     (bt (concat "```elisp-backtrace\n" bt "\n```"))
+                     (new-string (replace-last-regex-smart string backtrace-re bt)))
+               new-string
+             ;; else
+             string
+             ;; (if (and (equal (length string) (length new-string))
+             ;;          (string-equal string new-string))
+             ;;     (error "@Backtrace not found")
+             ;;   ;; else
+             ;;   new-string)
+             ))
+        ;; ((string-match path-re string pos)
+        ;;  (let ((file-content (
+        ;;  (replace-last-regex-smart string path-re ))
+        (t string))))
+
+
+;; org-ai-stream-completion - old
 (defun org-ai-api-request-prepare (req-type element sys-prompt sys-prompt-for-all-messages model max-tokens top-p temperature frequency-penalty presence-penalty service stream)
   "Compose API request from data and start a server-sent event stream.
 Call `org-ai-api-request' function as a next step.
@@ -680,6 +859,9 @@ Called from `org-ai-interface-step1' in main file.
                     (t (lambda (result) (org-ai--insert-single-response end-marker
                                                                         (org-ai--get-single-response-text result)
                                                                         nil))))))
+    (org-ai--debug "org-ai-api-request-prepare messages1" messages)
+    (setq messages (modify-last-user-content messages #'org-ai--tags))
+    (org-ai--debug "org-ai-api-request-prepare messages2" messages)
     ;; - Call and save buffer.
     (org-ai-timers--set
      (org-ai-api-request service model callback
@@ -1097,7 +1279,7 @@ For not stream url return event and hook after-change-functions
 					   :stream stream)))
     ;; - regex check
     (org-ai--check-model model endpoint) ; not empty and if "api.openai.com" or "openai.azure.com"
-
+    (org-ai--debug "org-ai-api-request endpoint:" service (type-of service))
     (org-ai--debug "org-ai-api-request endpoint:" endpoint (type-of endpoint))
     (org-ai--debug "org-ai-api-request headers:" url-request-extra-headers)
     (org-ai--debug "org-ai-api-request request-data:" (org-ai--prettify-json-string url-request-data))
@@ -1636,14 +1818,10 @@ Called from `org-ai-timers--progress-reporter-run'."
 
 ;;;###autoload
 (cl-defun org-ai-openai-stop-all-url-requests (&optional &key failed)
-  "Return t if buffer was found."
+  "Called from `org-ai-openai-stop-url-request' when not at some block,
+  Return t if buffer was found."
   (interactive)
-  (let ((buffers (org-ai-timers--get-all-keys)))
-    (org-ai--debug "org-ai-openai-stop-all-url-request" buffers)
-    (when buffers
-      (setq org-ai-timers--element-marker-variable-dict nil)
-      (org-ai-timers--interrupt-current-request buffers #'org-ai-openai--interrupt-url-request failed)
-      t)))
+  (org-ai-timers--interrupt-all-requests #'org-ai-openai--interrupt-url-request failed))
 
 
 

@@ -57,8 +57,9 @@ Return list of url-buffers.
 use `org-ai-timers--element-marker-variable-dict'."
   (seq-uniq (mapcar #'car
                     (seq-filter (lambda (entry)
-                                  (and (equal (cdr entry) variable)
-                                       (buffer-live-p (car entry))))
+                                  (equal (cdr entry) variable)
+                                       ;; (buffer-live-p (car entry))
+                                       )
                                 org-ai-timers--element-marker-variable-dict))))
 
 ;; org-ai-timers--set-variable
@@ -87,23 +88,29 @@ We use `eq' here."
 
 ;; (setq org-ai-timers--element-marker-variable-dict nil)
 ;; (org-ai-timers--set 1 'aa)
-;; (org-ai-timers--set-variable 2 'cc)
-;; (org-ai-timers--set-variable 3 'bb)
-;; (org-ai-timers--set-variable (list 3 2) 'bb)
-;; (org-ai-timers--get-all-variables)
+;; (org-ai-timers--set 2 'cc)
+;; (org-ai-timers--set 3 'bb)
+;; (org-ai-timers--set (list 3 2) 'bb)
+;; ;; (org-ai-timers--remove-key 1)
 ;; (print org-ai-timers--element-marker-variable-dict)
+;; (org-ai-timers--get-keys-for-variable 'bb)
+
+;; (org-ai-timers--get-all-variables)
+;; (org-ai-timers--get-all-keys)
+;;
 ;; (org-ai-timers--remove-variable 'aa)
 
-(defun org-ai-timers--get-all-variables ()
-  "Get all header-makers."
-  (seq-uniq (mapcar #'cdr org-ai-timers--element-marker-variable-dict)))
+;; (defun org-ai-timers--get-all-variables () ; not used
+;;   "Get all header-makers."
+;;   (seq-uniq (mapcar #'cdr org-ai-timers--element-marker-variable-dict)))
 
 (defun org-ai-timers--get-all-keys ()
-  "Get all live url-buffers."
-  (seq-uniq
-   (mapcar #'cdr (seq-filter (lambda (entry)
-                               (buffer-live-p (car entry)))
-                             org-ai-timers--element-marker-variable-dict))))
+  "Get all url-buffers."
+  (seq-uniq (mapcar #'car org-ai-timers--element-marker-variable-dict)))
+  ;; (seq-uniq
+  ;;  (mapcar #'cdr (seq-filter (lambda (entry)
+  ;;                              (buffer-live-p (car entry)))
+  ;;                            org-ai-timers--element-marker-variable-dict))))
 
 ;; (defun org-ai-timers--clear-variables () ; too simple
 ;;   (setq org-ai-timers--element-marker-variable-dict nil))
@@ -140,35 +147,40 @@ Called in
 (defun org-ai-timers--update-global-progress-reporter ()
   "Count url-buffers and stop reporter if it is empty.
 Called from
-`org-ai-openai-stop-url-request',
+`org-ai-api-request-llm-retries'
 `org-ai-timers--interrupt-current-request'
-`org-ai-timers--progress-reporter-run'."
-  (org-ai--debug "org-ai-timers--update-global-progress-reporter len:"
-                 (length (org-ai-timers--get-all-keys))
-                 (org-ai-timers--get-all-keys))
-  (let ((count (length (org-ai-timers--get-all-keys))))
-    (org-ai-update-mode-line count)
-    ;; (when (eql count 0)
-    ;;   (org-ai-timers--stop-global-progress-reporter failed)
-    ;;   )
-    ))
+`org-ai-timers--interrupt-all-requests'."
+  (let* ((buffers (org-ai-timers--get-all-keys))
+         (count (length buffers))
+         (count-live (length (delq nil (mapcar #'buffer-live-p buffers)))))
+    (org-ai--debug "org-ai-timers--update-global-progress-reporter count: %s count-live: %s" count count-live)
+    (let ((count (length (org-ai-timers--get-all-keys))))
+      (org-ai-update-mode-line count)
+      (when (eql count 0)
+        (org-ai-timers--stop-global-progress-reporter)))))
 
 (defun org-ai-timers--interrupt-all-requests (interrupt-request-func &optional failed)
   "Interrup all url requests and stop global timer.
+INTERRUPT-REQUEST-FUNC may be `org-ai-openai--interrupt-url-request' or
+`org-ai-openai--stop-tracking-url-request'.
 Called from
-`org-ai-openai-stop-url-request' when not at some block,
+`org-ai-openai-stop-all-url-requests' by C-g
 `org-ai-timers--progress-reporter-run' by global timer."
   (org-ai--debug "org-ai-timers--interrupt-all-requests" interrupt-request-func failed)
-  ;; stop requests
-  (mapc (lambda (url-buffer)
-          (funcall interrupt-request-func url-buffer))
-        (org-ai-timers--get-all-keys))
-  ;; clear list
-  (setq org-ai-timers--element-marker-variable-dict nil)
-  ;; (org-ai-timers--clear-variables)
-  ;; stop global timer
-  (org-ai-timers--update-global-progress-reporter)
-  (org-ai-timers--stop-global-progress-reporter failed))
+  (if-let ((buffers (org-ai-timers--get-all-keys)))
+      (progn
+        ;; stop requests
+        (mapc (lambda (url-buffer)
+                (funcall interrupt-request-func url-buffer))
+              buffers)
+        ;; clear list
+        (setq org-ai-timers--element-marker-variable-dict nil)
+
+        ;; stop global timer
+        (org-ai-timers--update-global-progress-reporter)
+        (org-ai-timers--stop-global-progress-reporter failed)
+        t)
+    nil))
 
 ;; (defun org-ai-timers--stop-current-timer (url-buffer &optional failed)
 ;;   (org-ai--debug "org-ai-timers--stop-current-timer")
@@ -249,7 +261,7 @@ Called from
   ;;         (funcall interrupt-request-func url-buffer))
   ;;       ))
     ;; - Update global timer
-    (org-ai-timers--update-global-progress-reporter failed))
+    (org-ai-timers--update-global-progress-reporter))
 
 
 
