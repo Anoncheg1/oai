@@ -1,27 +1,29 @@
-;;; org-ai-block.el --- org-ai special block helpers -*- lexical-binding: t; -*-
+;;; oai-block.el --- oai special block helpers -*- lexical-binding: t; -*-
+
+;; Copyright (C) 2023-2025 Robert Krahn and contributers
+;; Copyright (C) 2025 github.com/Anoncheg1
 
 ;; This file is NOT part of GNU Emacs.
 
-;; org-ai.el is free software: you can redistribute it and/or modify
+;; oai-block.el is free software: you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
 ;; the Free Software Foundation, either version 3 of the License, or
 ;; (at your option) any later version.
 
-;; org-ai.el is distributed in the hope that it will be useful,
+;; oai-block.el is distributed in the hope that it will be useful,
 ;; but WITHOUT ANY WARRANTY; without even the implied warranty of
 ;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 ;; GNU General Public License for more details.
 
 ;; You should have received a copy of the GNU General Public License
-;; along with org-ai.el.
+;; along with oai.el.
 ;; If not, see <https://www.gnu.org/licenses/>.
 
 ;;; Changelog
-;; - DONE: rename org-ai-special-block to org-ai-block-p
 ;; - DONE: complete is short for completion
-;; - DONE: org-ai-block-get-info fail if there is nothing in block.
+;; - DONE: oai-block-get-info fail if there is nothing in block.
 ;; - DONE: rename all CONTEXT to ELEMENT because context cause confusing (Org terms).
-;; - DONE: rename all except interface functions to "org-ai-block-" prefix.
+;; - DONE: rename all except interface functions to "oai-block-" prefix.
 
 ;;; Commentary:
 
@@ -34,12 +36,15 @@
 ;; - element - "room" you are in (e.g., a paragraph) (TYPE PROPS) (org-element-at-point)
 ;; - context - "furniture" you are touching within that room (e.g., a bold word, a link). (TYPE PROPS) (org-element-context)
 ;; - org-dblock-start-re
+;; (org-element-property :begin  (oai-block-p)) return content begin, while for other Org elements it return header begining.
+;; may be fixed with org-element-put-property, but it is not KISS.
 
 ;;; Code:
 ;;; -=-= all
 (require 'org)
 (require 'org-element)
 (require 'org-macs)
+(require 'oai-block-tags)
 
 (when (and (boundp 'org-protecting-blocks) (listp org-protecting-blocks))
   (add-to-list 'org-protecting-blocks "ai"))
@@ -50,16 +55,16 @@
 
 ;; `org-element-with-disabled-cache' is not available pre org-mode 9.6.6, i.e.
 ;; emacs 28 does not ship with it
-(defmacro org-ai-block--org-element-with-disabled-cache (&rest body)
+(defmacro oai-block--org-element-with-disabled-cache (&rest body)
   "Run BODY without active org-element-cache."
   (declare (debug (form body)) (indent 0))
   `(cl-letf (((symbol-function #'org-element--cache-active-p) (lambda (&rest _) nil)))
      ,@body))
 
-(defun org-ai-block-p ()
+(defun oai-block-p ()
   "Are we inside a #+begin_ai...#+end_ai block?
 Like `org-in-src-block-p'. Return element."
-  (org-ai-block--org-element-with-disabled-cache ;; with cache enabled we get weird Cached element is incorrect warnings
+  (oai-block--org-element-with-disabled-cache ;; with cache enabled we get weird Cached element is incorrect warnings
     (cl-loop with context = (org-element-context)
              while (and context
                         (not (equal 'special-block (org-element-type context)))
@@ -67,59 +72,59 @@ Like `org-in-src-block-p'. Return element."
              do (setq context (org-element-property :parent context))
              finally return context)))
 
-(defun org-ai-block-element-by-marker (marker)
+(defun oai-block-element-by-marker (marker)
   (with-current-buffer (marker-buffer marker)
     (save-excursion
       (goto-char marker)
-      (org-ai-block-p))))
+      (oai-block-p))))
 
-(defun org-ai-block-get-info (&optional element no-eval)
+(defun oai-block-get-info (&optional element no-eval)
   "Parse the header of #+begin_ai...#+end_ai block.
 `ELEMENT' is the element of the special block. Return an alist of
 key-value pairs.
 Like `org-babel-get-src-block-info' but instead of list return only
 arguments.
-To get value use: (alist-get :value (org-ai-block-get-info))
+To get value use: (alist-get :value (oai-block-get-info))
 Use ELEMENT only in current moment."
   (org-babel-parse-header-arguments
    (org-element-property
     :parameters
-    (or element (org-ai-block-p))) no-eval))
+    (or element (oai-block-p))) no-eval))
 
-(defun org-ai-block--string-equal-ignore-case (string1 string2)
+(defun oai-block--string-equal-ignore-case (string1 string2)
   "Helper for backwards compat.
 STRING1 and STRING2 are strings. Return t if they are equal
 ignoring case."
   (eq 't (compare-strings string1 0 nil string2 0 nil t)))
 
-(defun org-ai-block-get-content (&optional element)
+(defun oai-block-get-content (&optional element)
   "Extracts the text content of the #+begin_ai...#+end_ai block.
 `ELEMENT' is the element of the special block.
 
-Will expand noweb templates if an 'org-ai-noweb' property or
+Will expand noweb templates if an 'oai-noweb' property or
 'noweb' header arg is \"yes\".
 Use ELEMENT only in current moment, if buffer modified you will need new
 ELEMENT."
-  (let* ((element (or element (org-ai-block-p)))
+  (let* ((element (or element (oai-block-p)))
          (content-start (org-element-property :contents-begin element))
          (content-end (org-element-property :contents-end element))
          (unexpanded-content (if (or (not content-start) (not content-end))
                                  (error "Empty block")
                                ;; else
                                (string-trim (buffer-substring-no-properties content-start content-end))))
-         (info (org-ai-block-get-info element))
+         (info (oai-block-get-info element))
          (noweb-control (or (alist-get :noweb info nil)
-                            (org-entry-get (point) "org-ai-noweb" 1)
+                            (org-entry-get (point) "oai-noweb" 1)
                             "no"))
-         (content (if (org-ai-block--string-equal-ignore-case "yes" noweb-control)
+         (content (if (oai-block--string-equal-ignore-case "yes" noweb-control)
                       (org-babel-expand-noweb-references (list "markdown" unexpanded-content))
                     unexpanded-content)))
     content))
 
-(defun org-ai-block--get-request-type (info)
+(defun oai-block--get-request-type (info)
   "Look at the header of the #+begin_ai...#+end_ai block.
 returns the type of request. `INFO' is the alist of key-value
-pairs from `org-ai-block-get-info'."
+pairs from `oai-block-get-info'."
   (cond
    ((not (eql 'x (alist-get :chat info 'x))) 'chat)
    ((not (eql 'x (alist-get :completion info 'x))) 'completion)
@@ -129,7 +134,7 @@ pairs from `org-ai-block-get-info'."
    ((not (eql 'x (alist-get :local info 'x))) 'local-chat)
    (t 'chat)))
 
-(cl-defun org-ai-block--get-sys (&key info default)
+(cl-defun oai-block--get-sys (&key info default)
   "Check if :sys exist in #+begin_ai parameters.
 If exist return nil or string, if not exist  return `default'."
   (let ((sys-raw  (alist-get :sys info 'x)))
@@ -139,12 +144,12 @@ If exist return nil or string, if not exist  return `default'."
       ;; else - nil or string
       sys-raw)))
 
-(defmacro org-ai-block--let-params (info definitions &rest body)
-  "A specialized `let*' macro for Org-AI parameters.
+(defmacro oai-block--let-params (info definitions &rest body)
+  "A specialized `let*' macro for Oai parameters.
 DEFINITIONS is a list of (VARIABLE &optional DEFAULT-FORM &key TYPE).
 TYPE can be 'number or 'identity.
 Parameters are sourced from:
-1. From Org-AI block header `info' alist. (e.g., :model \"gpt-4\")
+1. From Oai block header `info' alist. (e.g., :model \"gpt-4\")
 2. Org inherited property. (e.g., #+PROPERTY: model gpt-4)
 3. DEFAULT-FORM."
   `(let* ,(cl-loop for def-item in definitions
@@ -166,20 +171,20 @@ Parameters are sourced from:
      ,@body))
 
 
-(defvar org-ai-block--roles-regex "\\[SYS\\]:\\|\\[ME\\]:\\|\\[ME:\\]\\|\\[AI\\]:\\|\\[AI_REASON\\]:")
+(defvar oai-block--roles-regex "\\[SYS\\]:\\|\\[ME\\]:\\|\\[ME:\\]\\|\\[AI\\]:\\|\\[AI_REASON\\]:")
 
-(defun org-ai-block--chat-role-regions ()
+(defun oai-block--chat-role-regions ()
   "Splits the special block by role prompts.
 Return line begining positions of first line of content, roles, #+end_ai
 line."
-  (if-let* ((element (org-ai-block-p))
+  (if-let* ((element (oai-block-p))
             (content-start (org-element-property :contents-begin element))
             (content-end (org-element-property :contents-end element)))
       (let ((result (save-match-data
                       (save-excursion
                         (goto-char content-start)
                         (cl-loop with result
-                                 while (search-forward-regexp org-ai-block--roles-regex content-end t) ; todo, make as global variable
+                                 while (search-forward-regexp oai-block--roles-regex content-end t) ; todo, make as global variable
                                  do (push (match-beginning 0) result)
                                  finally return result)))))
         (if result
@@ -190,24 +195,24 @@ line."
 
 ;;; -=-= Interactive
 
-(defcustom org-ai-block-fontify-markdown t
+(defcustom oai-block-fontify-markdown t
   "fontinfy ```lang blocks."
   :type 'boolean
-  :group 'org-ai)
+  :group 'oai)
 
-(defun org-ai-mark-last-region ()
-  "Marks the last prompt in an org-ai block."
+(defun oai-mark-last-region ()
+  "Marks the last prompt in an oai block."
   (interactive)
-  (when-let* ((regions (reverse (org-ai-block--chat-role-regions)))
+  (when-let* ((regions (reverse (oai-block--chat-role-regions)))
               (last-region-end (pop regions))
               (last-region-start (pop regions)))
         (goto-char last-region-end)
         (push-mark last-region-start t t)))
 
-(defun org-ai-mark-region-at-point ()
+(defun oai-mark-region-at-point ()
   "Marks the prompt at point."
   (interactive)
-  (when-let* ((regions (org-ai-block--chat-role-regions))
+  (when-let* ((regions (oai-block--chat-role-regions))
               (start (cl-find-if (lambda (x) (>= (point) x)) (reverse regions)))
               (end (cl-find-if (lambda (x) (<= (point) x)) regions)))
     (when (= start end)
@@ -220,52 +225,52 @@ line."
       (push-mark end t t)
       (cons start end))))
 
-(defun org-ai-forward-section (&optional arg)
+(defun oai-forward-section (&optional arg)
   "Move forward to end of section.
 A negative argument ARG = -N means move backward."
   (interactive "^p")
   ;;   TODO:
   ;; With argument ARG, do it ARG times;
   ;; a negative argument ARG = -N means move backward N paragraphs.
-  (when-let* ((regions (org-ai-block--chat-role-regions))
+  (when-let* ((regions (oai-block--chat-role-regions))
               (start (cl-find-if (lambda (x) (>= (point) x)) (reverse regions)))
               (end (cl-find-if (lambda (x) (< (point) x)) regions)))
-    (print (list start end))
+    (oai--debug "oai-forward-section1 %s " (list start end))
     (or arg (setq arg 1))
     (if (> arg 0)
         (goto-char end)
       ;; else - backward
       (let ((prev (cl-find-if (lambda (x) (>= (1- start) x)) (reverse regions))))
-        (print (list (> (point) start) prev))
+        (oai--debug "oai-forward-section2 %s %s " (> (point) start) prev)
         (if (and (> (point) start) ; if at the middle of first section
                  (not prev))
             (goto-char start)
           ;; else
           (goto-char (cl-find-if (lambda (x) (>= (1- start) x)) (reverse regions))))))))
 
-(defun org-ai-kill-region-at-point (&optional arg)
+(defun oai-kill-region-at-point (&optional arg)
   "Kills the prompt at point.
 The numeric `ARG' can be used for killing the last n."
   (interactive "P")
   (cl-loop repeat (or arg 1)
-           do (when-let ((region (org-ai-mark-region-at-point)))
+           do (when-let ((region (oai-mark-region-at-point)))
                 (cl-destructuring-bind (start . end) region
                   (kill-region end start)))))
 
 ;;; -=-= Markers
 
-(defun org-ai-block--get-content-end-marker (&optional element)
+(defun oai-block--get-content-end-marker (&optional element)
   "Return a marker for the :contents-end property of ELEMENT.
-Used in `org-ai-interface-step1'"
-  (let ((el (or element (org-ai-block-p))))
+Used in `oai-call-block'"
+  (let ((el (or element (oai-block-p))))
     (let ((contents-end-pos (org-element-property :contents-end el)))
       (when contents-end-pos
         (copy-marker contents-end-pos)))))
 
-(defun org-ai-block-get-header-marker (&optional element)
+(defun oai-block-get-header-marker (&optional element)
   "Return marker for ai block at current buffer at current positon.
 Use ELEMENT only in current moment."
-  (let ((el (or element (org-ai-block-p))))
+  (let ((el (or element (oai-block-p))))
     ;; (with-current-buffer (org-element-property :buffer el)
     (if el
         (save-excursion
@@ -275,8 +280,7 @@ Use ELEMENT only in current moment."
 
 ;;; -=-= Result
 
-
-(defun org-ai-insert-result (result &optional result-params hash exec-time)
+(defun oai-block-insert-result (result &optional result-params hash exec-time)
   "Modified `org-babel-insert-result' function.
 Insert RESULT into the current buffer.
 TODO: EXEC-TIME."
@@ -285,7 +289,7 @@ TODO: EXEC-TIME."
   (save-excursion
     (let* ((visible-beg (point-min-marker))
            (visible-end (copy-marker (point-max) t))
-           (existing-result (org-ai-where-is-ai-result t nil hash))
+           (existing-result (oai-block-where-is-result t nil hash))
            ;; When results exist outside of the current visible
            ;; region of the buffer, be sure to widen buffer to
            ;; update them.
@@ -306,14 +310,17 @@ TODO: EXEC-TIME."
               (delete-region (point) (org-babel-result-end)))
              ((member "append" result-params)
               (goto-char (org-babel-result-end)) (setq beg (point-marker))))
-            (goto-char beg) (insert result)
+            (goto-char beg) (insert (concat result "\n"))
             (setq end (copy-marker (point) t))
+            (org-babel-examplify-region beg end "")
+            ;; finally
             (when outside-scope (narrow-to-region visible-beg visible-end)) ;; ---- NARROW
-            )))))
+            ))))
+  t)
 
-(defun org-ai-where-is-ai-result (&optional insert _info hash)
+(defun oai-block-where-is-result (&optional insert _info hash)
   "Modified `org-babel-where-is-src-block-result' function."
-  (let ((context (org-ai-block-p)))
+  (let ((context (oai-block-p)))
     (catch :found
       (org-with-wide-buffer
        (let* ((name (org-element-property :name context))
@@ -358,7 +365,6 @@ TODO: EXEC-TIME."
       ;; appropriate.  In this case, ensure there is an empty line
       ;; after the previous element.
       (when insert
-        (print "here")
         (save-excursion
           (goto-char (min (org-element-end context) (point-max)))
           (skip-chars-backward " \t\n")
@@ -369,63 +375,94 @@ TODO: EXEC-TIME."
            (org-element-property :name context) hash)
           (point)))))
 )
-;;
+
+(defun oai-block-remove-result (&optional info keep-keyword)
+  "Remove the result of the current source block.
+INFO argument is currently ignored.
+When KEEP-KEYWORD is non-nil, keep the #+RESULT keyword and just remove
+the rest of the result."
+  (interactive)
+  (let ((location (oai-block-where-is-result nil info))
+	(case-fold-search t))
+    (when location
+      (save-excursion
+        (goto-char location)
+	(when (looking-at org-babel-result-regexp)
+	  (delete-region
+	   (if keep-keyword (line-beginning-position 2)
+	     (save-excursion
+	       (skip-chars-backward " \r\t\n")
+	       (line-beginning-position 2)))
+	   (progn (forward-line) (org-babel-result-end))))))))
 
 
+;;; -=-= Markdown block, fontify mostly
+(defvar oai-block--markdown-begin-re "^```\\([^ \t\n[{]+\\)[\s-]?\n")
+(defvar oai-block--markdown-end-re "^```[\s-]?$")
 
-;;; -=-= Markdown block
-(defvar org-ai-block--markdown-begin-re "^```\\([^ \t\n[{]+\\)[\s-]?\n")
-(defvar org-ai-block--markdown-end-re "^```[\s-]?$")
-
-(defun org-ai-block--fontify-markdown-subblocks (start end)
+(defun oai-block--fontify-markdown-subblocks (start end)
   "Fontify ```language ... ``` fenced mardown code blocks.
-Used to call `org-src-font-lock-fontify-block' on code subblock."
+ We search for begining of block, then for end of block, then fontify
+ with `org-src-font-lock-fontify-block'."
   (goto-char start)
   (let ((case-fold-search t))
     (while (and (< (point) end)
-                (re-search-forward org-ai-block--markdown-begin-re end t))
+                (re-search-forward oai-block--markdown-begin-re end t))
       (let* ((lang (match-string 1))
              (block-begin (match-end 0)))
         ;; (print (list "re-search-forward4" (point) end))
-        (when (re-search-forward org-ai-block--markdown-end-re end t)
+        (when (re-search-forward oai-block--markdown-end-re end t)
           (let ((block-end (match-beginning 0)))
             (when (fboundp (org-src-get-lang-mode lang)) ; for org-src-font-lock-fontify-block
               (org-src-font-lock-fontify-block lang block-begin block-end)
+              t
               )))))))
 
-(defun org-ai-block--font-lock-fontify-ai-subblocks (limit)
-  "Fontify Org links inside #+begin_ai ... #+end_ai blocks up to LIMIT.
+(defun oai-block--font-lock-fontify-ai-subblocks (limit)
+  "Fontify markdown subblocks in ai blocks, up to LIMIT.
+This is special fontify function, that return t when match found.
 We insert advice right after `org-fontify-meta-lines-and-blocks-1' witch
-called as a part of Org Font Lock mode configuration of keywords and
-corresponding font-lock highlighting rules in `font-lock-defaults'
-variable."
-  (if org-ai-block-fontify-markdown
-      (let ((case-fold-search t))
+called as a part of Org Font Lock mode configuration of keywords (in
+`org-set-font-lock-defaults' and corresponding font-lock highlighting
+rules in `font-lock-defaults' variable."
+  (if oai-block-fontify-markdown
+      (let ((case-fold-search t)
+            (ret))
         (while (and (re-search-forward "^#\\+begin_ai[^\n]*\n" limit t)
                     (< (point) limit))
           (let ((beg (match-end 0)))
             (when (re-search-forward "^#\\+end_ai.*$" nil t)
               (let ((end (match-beginning 0)))
                 (save-match-data
-                  (org-ai-block--fontify-markdown-subblocks beg end))
-                ))))))
-  ;; required by font lock mode:
-  (goto-char limit)
-  t)
+                  (setq ret (oai-block--fontify-markdown-subblocks beg end)))
+                ))))
+        ;; required by font lock mode:
+        (goto-char limit)
+        ret
+        )))
 
-(defun org-ai-block--insert-after (list pos element)
+(defun oai-block--insert-after (list pos element)
   "Insert ELEMENT at after position POS in LIST."
   (nconc (take (1+ pos) list) (list element) (nthcdr (1+ pos) list)))
 
-(defun org-ai-block--set-ai-keywords()
-  "Insert ower function in Org font lock keywords."
-  (setq org-font-lock-extra-keywords (org-ai-block--insert-after
+;;; -=-= Fontify Markdown blocks and Tags
+
+(defun oai-block--set-ai-keywords()
+  "Hook, that Insert our fontify functions in Org font lock keywords."
+  (setq org-font-lock-extra-keywords (oai-block--insert-after
                                       org-font-lock-extra-keywords
                                       (seq-position org-font-lock-extra-keywords '(org-fontify-meta-lines-and-blocks))
-                                      '(org-ai-block--font-lock-fontify-ai-subblocks))))
+                                      '(oai-block--font-lock-fontify-ai-subblocks)))
+  (setq org-font-lock-extra-keywords (oai-block--insert-after
+                                      org-font-lock-extra-keywords
+                                      (seq-position org-font-lock-extra-keywords '(org-fontify-meta-lines-and-blocks))
+                                      '(oai-block-tags--font-lock-fontify-links)))
+  )
 
-;; not used now
-(defun markdown-mark-fenced-code-body (&optional limit-begin limit-end)
+;;; -=-= Select markdown block
+
+;; not used now TODO: make interactive for region mark
+(defun oai-block-markdown-mark-fenced-code-body (&optional limit-begin limit-end)
   "Mark content inside Markdown fenced code block (```), excluding header/footer.
 LIMIT-BEGIN and LIMIT-END restrict the search region around point.
 Returns t if region was marked, nil otherwise."
@@ -434,33 +471,86 @@ Returns t if region was marked, nil otherwise."
           (end nil))
       (save-excursion
         ;; Find start fence
-        (when (re-search-backward org-ai-block--markdown-begin-re (or limit-begin (point-min)) t)
+        (when (re-search-backward oai-block--markdown-begin-re (or limit-begin (point-min)) t)
           (setq start (match-end 0))
           (goto-char point-pos)
           ;; do we inside owr block?
-          (when (and (re-search-backward org-ai-block--markdown-end-re  (or limit-begin (point-min)) t)
+          (when (and (re-search-backward oai-block--markdown-end-re  (or limit-begin (point-min)) t)
                      (> (match-beginning 0) start)
                      (setq start nil))))
         ;; Find end fence
         (goto-char point-pos)
         (when (and start
-                   (re-search-forward org-ai-block--markdown-end-re (or limit-end (point-max)) t))
+                   (re-search-forward oai-block--markdown-end-re (or limit-end (point-max)) t))
           (setq end (match-beginning 0))
           (goto-char point-pos)
           ;; do we inside owr block?
-          (when (and (re-search-forward org-ai-block--markdown-begin-re (or limit-end (point-max)) t)
+          (when (and (re-search-forward oai-block--markdown-begin-re (or limit-end (point-max)) t)
                      (< (match-end 0) end)
                      (setq end nil)))))
       ;; If point is inside fences, mark region
-      ;; (print (list point-pos start end))
       (when (and start end (> point-pos start) (< point-pos end))
         (set-mark start)
-        (print end)
         (goto-char end)
         (forward-line -1)
         (end-of-line)
         (activate-mark)
         t)))
+
+
+(defun oai-block-mark-src-block-body ()
+  "Mark Org blocks content around cursor.
+Excluding header and footer."
+  (interactive)
+  (let ((elem (org-element-at-point)))
+    (goto-char (org-element-property :begin elem))
+    (forward-line 1)
+    (set-mark (point))
+    (let ((case-fold-search t))
+          (re-search-forward "#\\+end_" nil t))
+    (beginning-of-line)
+    ;; (goto-char (org-element-property :end elem))
+    ;; (forward-line -2)
+    ;; (end-of-line)
+    (activate-mark)
+    t))
+
+;; like M-h but for C-c h
+
+(defun oai-block-mark-md-block-body ()
+  "Mark content of Markdown code block, or fallback to org-mark-element.
+Mark or select block content around cursor."
+  (interactive)
+  (cond
+   ;; 1) mardown in ai block & 2) ai block only
+   ((and (featurep 'oai-block)
+         (bound-and-true-p oai-mode)
+         (if-let*((element (oai-block-p))
+                  (content-start (org-element-property :contents-begin element))
+                  (content-end (org-element-property :contents-end element)))
+             (if
+                 ;; 1 mardown in ai block
+                 (oai-block-markdown-mark-fenced-code-body content-start content-end)
+                 t
+               ;; else - 2 ai block only
+               (set-mark content-start)
+               (goto-char content-end)
+               (activate-mark)
+               t))))
+   ;; 1) mardown in Org blocks & 2) Org block only
+   ((let ((elem (org-element-at-point)))
+           (and (member (org-element-type elem) '(src-block example-block quote-block verse-block special-block comment-block))
+                (if (and (featurep 'oai-block)
+                         (oai-block-markdown-mark-fenced-code-body (org-element-property :begin elem) (org-element-property :end elem)))
+                    t
+                  ;; else
+                  (oai-block-mark-src-block-body)))))
+   ;; Markdown code block (``` fenced block)
+   ;; ((markdown-mark-fenced-code-body))
+   ;; Otherwise
+   (t
+    (org-mark-element))))
+
 ;;; provide
-(provide 'org-ai-block)
-;;; org-ai-block.el ends here
+(provide 'oai-block)
+;;; oai-block.el ends here

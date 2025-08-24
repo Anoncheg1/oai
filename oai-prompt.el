@@ -1,5 +1,7 @@
 ;;; oai-prompt.el --- Chains of requests to LLM -*- lexical-binding: t; -*-
 
+;; Copyright (C) 2025 github.com/Anoncheg1
+
 ;; This file is NOT part of GNU Emacs.
 
 ;; oai-prompt.el is free software: you can redistribute it and/or modify
@@ -41,27 +43,30 @@
 ;;
 ;;; Code:
 ;;; -=-= all
-(require 'org-ai-block)
-(require 'org-ai-openai)
+(require 'oai-block)
+(require 'oai-restapi)
 (require 'async)
+(require 'oai-timers)
+
+
 
 (defvar oai-prompt-chain-list
-  (list "Plan how to solve this with 3 steps of research and do first step."
-        "Do 2th part of plan and outline what was missed before."
-        "Do 3th part of plan and outline what was missed before, summarize results and give a final answer."))
+  (list "Give very short research plan with three parts to find answer; do only the first part of the plan. Note any missed points and correct before moving on."
+        "Complete the second part of plan only."
+        "Do the third part; integrate insights, then give a final answer to the main question."))
 
 
 (defun oai-prompt-collect-chat-research-steps-prompt (commands ind block-content &optional default-system-prompt max-tokens)
   "Compose messages for LLM for IND step of COMMANDS.
-Add to result of `org-ai-openai--collect-chat-messages' CoT prompts.
+Add to result of `oai-restapi--collect-chat-messages' CoT prompts.
 Compose IND request for COMMANDS and ind-1 response.
-BLOCK-CONTENT is result of `org-ai-block-get-content'.
+BLOCK-CONTENT is result of `oai-block-get-content'.
 IND count from 0.  RESP-QUEST  is list of string  of lengh IND+1  - raw
 content of ai block or answer from  LLM.  We assume that commands and AI
 answers except of the first one are already in block-content."
-  (let* ((bcont (org-ai-openai--collect-chat-messages block-content))
-         (recom (if (and org-ai-default-max-tokens-add-recomendation max-tokens)
-                    (org-ai-openai--get-lenght-recomendation max-tokens)))
+  (let* ((bcont (oai-restapi--collect-chat-messages block-content))
+         (recom (if (and oai-restapi-add-max-tokens-recommendation max-tokens)
+                    (oai-restapi--get-lenght-recommendation max-tokens)))
          (comm0 (nth 0 commands))
          (comm0 (if (and (= ind 0) recom)
                     (concat comm0 " " recom)
@@ -82,14 +87,14 @@ answers except of the first one are already in block-content."
 ;; - Test
 (cl-assert
    (equal
-    (let ((org-ai-default-max-tokens-add-recomendation t)
+    (let ((oai-restapi-add-max-tokens-recommendation t)
           (max-tokens 200))
       (oai-prompt-collect-chat-research-steps-prompt oai-prompt-chain-list
                                              0
                                              "[ME:]How to make coffe?\n[AI]: IDK."
                                              ""
                                              max-tokens))
-      (vector (list :role 'system :content (concat (nth 0 oai-prompt-chain-list) " " (org-ai-openai--get-lenght-recomendation 200)))
+      (vector (list :role 'system :content (concat (nth 0 oai-prompt-chain-list) " " (oai-restapi--get-lenght-recommendation 200)))
                     (list :role 'user :content "How to make coffe?")
                     (list :role 'assistant :content "IDK."))))
 
@@ -105,7 +110,7 @@ answers except of the first one are already in block-content."
     (list :role 'system :content (nth 1 oai-prompt-chain-list)))))
 
 (cl-assert
- (let (org-ai-default-max-tokens-add-recomendation)
+ (let (oai-restapi-add-max-tokens-recommendation)
    (equal
     (oai-prompt-collect-chat-research-steps-prompt oai-prompt-chain-list
                                            2
@@ -119,7 +124,7 @@ answers except of the first one are already in block-content."
 
 
 (cl-assert
- (let (org-ai-default-max-tokens-add-recomendation)
+ (let (oai-restapi-add-max-tokens-recommendation)
    (equal
     (oai-prompt-collect-chat-research-steps-prompt oai-prompt-chain-list
                                            0
@@ -136,44 +141,44 @@ answers except of the first one are already in block-content."
 Aspects:
 1) start and stop reporter at begining and at the end (final callback).
 2) error handling: kill reporter, kill tmp buffer, kill timers"
-  (org-ai--debug "oai-prompt-agent-request-prepare1 service, model: %s %s" service model)
+  (oai--debug "oai-prompt-agent-request-prepare1 service, model: %s %s" service model)
 
-  (if (string-equal (alist-get :pag (org-ai-block-get-info element)) "my")
+  (if (string-equal (alist-get :pag (oai-block-get-info element)) "my")
       ;; - My request
       (let ((service (or service 'github))
-            (end-marker (org-ai-block--get-content-end-marker element))
-            (header-marker (org-ai-block-get-header-marker element))
+            (end-marker (oai-block--get-content-end-marker element))
+            (header-marker (oai-block-get-header-marker element))
             ;; (gap-between-requests 3) ; TODO
-            (buffer-key (get-buffer-create "*org-ai--chain-tmp*" t)) ; use one buffer as for updating global notification timer
-            (step (alist-get :step (org-ai-block-get-info element)))
+            (buffer-key (get-buffer-create "*oai--chain-tmp*" t)) ; use one buffer as for updating global notification timer
+            (step (alist-get :step (oai-block-get-info element)))
             )
 
         (let (
             (callbackmy (lambda (data callback)
                           (when data ; if not data it is fail
-                            (org-ai--debug "calbackmy")
-                            (org-ai--insert-single-response end-marker (concat "[AI]: " data) nil 'final)
+                            (oai--debug "calbackmy")
+                            (oai-restapi--insert-single-response end-marker (concat "[AI]: " data) nil 'final)
                             (run-at-time 0 nil callback data)
-                            (org-ai-timers--progress-reporter-run #'org-ai-openai--stop-tracking-url-request))))
+                            (oai-timers--progress-reporter-run #'oai-restapi--stop-tracking-url-request))))
             (calbafin (lambda (data callback)
                         (when data ; if not data it is fail
-                          (org-ai--debug "calbafin")
-                          (org-ai--insert-single-response end-marker (concat "[AI]: " data))
-                          (org-ai--insert-single-response end-marker nil 'insertrole 'final) ; finalize
-                          (org-ai-timers--interrupt-current-request (org-ai-timers--get-keys-for-variable header-marker) #'org-ai-openai--stop-tracking-url-request)
-                          (org-ai-timers--interrupt-current-request buffer-key #'org-ai-openai--stop-tracking-url-request))))
+                          (oai--debug "calbafin")
+                          (oai-restapi--insert-single-response end-marker (concat "[AI]: " data))
+                          (oai-restapi--insert-single-response end-marker nil 'insertrole 'final) ; finalize
+                          (oai-timers--interrupt-current-request (oai-timers--get-keys-for-variable header-marker) #'oai-restapi--stop-tracking-url-request)
+                          (oai-timers--interrupt-current-request buffer-key #'oai-restapi--stop-tracking-url-request))))
             (call (lambda (step)
                     (lambda (data callback)
-                      (org-ai--debug "oai-prompt-agent-request-prepare-call step %s" step)
-                      (org-ai--debug "oai-prompt-agent-request-prepare-call max-tokens %s header-marker %s sys-prompt %s" max-tokens header-marker sys-prompt )
-                      (org-ai-api-request-llm-retries service
+                      (oai--debug "oai-prompt-agent-request-prepare-call step %s" step)
+                      (oai--debug "oai-prompt-agent-request-prepare-call max-tokens %s header-marker %s sys-prompt %s" max-tokens header-marker sys-prompt )
+                      (oai-restapi-request-llm-retries service
                                                       model
-                                                      org-ai-timers-duration
+                                                      oai-timers-duration
                                                       callback
                                                       :retries 3
                                                       :messages (oai-prompt-collect-chat-research-steps-prompt oai-prompt-chain-list
                                                                                                        step
-                                                                                                       (with-current-buffer (marker-buffer header-marker) (string-trim (org-ai-block-get-content (org-ai-block-element-by-marker header-marker))))
+                                                                                                       (with-current-buffer (marker-buffer header-marker) (string-trim (oai-block-get-content (oai-block-element-by-marker header-marker))))
                                                                                                        sys-prompt
                                                                                                        max-tokens)
                                                       :max-tokens max-tokens
@@ -184,7 +189,7 @@ Aspects:
                                                       :presence-penalty presence-penalty)))))
 
 
-        (org-ai--debug "oai-prompt-agent-request-prepare2 %s %s %s %s" header-marker service model org-ai-timers-duration)
+        (oai--debug "oai-prompt-agent-request-prepare2 %s %s %s %s" header-marker service model oai-timers-duration)
         ;;
         (start-async-chain nil
                            (list (funcall call 0)
@@ -196,12 +201,12 @@ Aspects:
                                  ))
           ;; Global reporter uppdated and run all the time.
           ;; Every task have own timer for parallel requests to retry them.
-          (org-ai-timers--set buffer-key header-marker)
-          (org-ai-timers--progress-reporter-run #'org-ai-openai--stop-tracking-url-request (* org-ai-timers-duration 3) )))
+          (oai-timers--set buffer-key header-marker)
+          (oai-timers--progress-reporter-run #'oai-restapi--stop-tracking-url-request (* oai-timers-duration 3) )))
 
       ;; - else - built-in
-      (org-ai--debug "ELSE")
-      (org-ai-api-request-prepare req-type element sys-prompt sys-prompt-for-all-messages model max-tokens top-p temperature frequency-penalty presence-penalty service stream)
+      (oai--debug "ELSE")
+      (oai-restapi-request-prepare req-type element sys-prompt sys-prompt-for-all-messages model max-tokens top-p temperature frequency-penalty presence-penalty service stream)
   ))
 
 

@@ -1,12 +1,28 @@
-;;; org-ai-optional.el --- Useful functions that not enabled by default.  -*- lexical-binding: t; -*-
+;;; oai-optional.el --- Useful functions that not enabled by default.  -*- lexical-binding: t; -*-
 
 ;;; License
 
 ;; Copyright (C) 2025 github.com/Anoncheg1
 
-;;; Code:
+;; This file is NOT part of GNU Emacs.
 
-;; (cl-defun org-ai-optional-remove-distant-empty-lines (start end)
+;; oai-optional.el is free software: you can redistribute it and/or modify
+;; it under the terms of the GNU General Public License as published by
+;; the Free Software Foundation, either version 3 of the License, or
+;; (at your option) any later version.
+
+;; oai-optional.el is distributed in the hope that it will be useful,
+;; but WITHOUT ANY WARRANTY; without even the implied warranty of
+;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+;; GNU General Public License for more details.
+
+;; You should have received a copy of the GNU General Public License
+;; along with oai.el.
+;; If not, see <https://www.gnu.org/licenses/>.
+
+;;; Commentry:
+
+;; (cl-defun oai-optional-remove-distant-empty-lines (start end)
 ;;   "Remove empty lines in current buffer between START and END.
 ;; Removes an empty line only if another empty line is two lines above it.
 ;; An 'empty line' is blank or whitespace-only.
@@ -90,9 +106,11 @@
 
 ;;     (message "Removed empty lines based on condition.")))
 
+;;; Code:
+
 (require 'cl-lib) ; Ensure cl-lib is loaded for cl-defun and cl-destructuring-bind
 
-(cl-defun org-ai-optional-remove-distant-empty-lines (start end)
+(cl-defun oai-optional-remove-distant-empty-lines (start end)
   "Remove empty lines in current buffer between START and END.
 Removes an empty line only if another empty line is two lines above it.
 An 'empty line' is blank or whitespace-only.
@@ -171,7 +189,7 @@ Does not remove an empty line if the line immediately following it contains '[ME
     )))
 
 
-;; ;; - Test for `org-ai-optional-remove-distant-empty-lines' function
+;; ;; - Test for `oai-optional-remove-distant-empty-lines' function
 ;; (with-temp-buffer
 ;;     ;; Set up initial buffer content
 ;;     (insert "line 1\n\nline 2\n\nline 3\n\nline 4\nline 5\n\nline 6\n")
@@ -179,7 +197,7 @@ Does not remove an empty line if the line immediately following it contains '[ME
 ;;     (let ((start (point-min))
 ;;           (end (point-max)))
 ;;       ;; Call the function
-;;       (org-ai-optional-remove-distant-empty-lines start end))
+;;       (oai-optional-remove-distant-empty-lines start end))
 ;;       (buffer-substring-no-properties                           (point-min)
 ;;                                                                 (point-max))
 ;;     )
@@ -191,13 +209,13 @@ Does not remove an empty line if the line immediately following it contains '[ME
 ;;     (let ((start (point-min))
 ;;           (end (point-max)))
 ;;       ;; Call the function
-;;       (org-ai-optional-remove-distant-empty-lines start end))
+;;       (oai-optional-remove-distant-empty-lines start end))
 ;;       (buffer-substring-no-properties                           (point-min)
 ;;                                                                 (point-max))
 ;;     )
 
 
-(defun org-ai-optional-remove-headers (beg-pos end-pos)
+(defun oai-optional-remove-headers (beg-pos end-pos)
   "Remove Org mode header prefixes between BEG-POS and END-POS in the current buffer.
 LLMs sometimes add ** header ** to text, this break Org.
 Uses `org-outline-regexp-bol' to match headers, respecting user-configured prefixes."
@@ -208,24 +226,24 @@ Uses `org-outline-regexp-bol' to match headers, respecting user-configured prefi
       (goto-char (point-min))
       (replace-regexp-in-region org-outline-regexp-bol "" (point-min) (point-max)))))
 
-(defcustom org-ai-optional-fill-paragraph-functions
+(defcustom oai-optional-fill-paragraph-functions
   (list
    'org-fill-paragraph)
    "List of steps to perform in the `my/org-fill-paragraph' function.
 Replace single `fill-paragraph-function' variable with list of
 functions."
   :type '(repeat function)
-  :group 'my/org)
+  :group 'oai)
 
-(defun org-ai-optional-fill-paragraph (&optional justify region)
+(defun oai-optional-fill-paragraph (&optional justify region)
   "Call functions until success.
 Replace single `fill-paragraph-function' with list of functions.
 Usage:
-(setq org-ai-optional-fill-paragraph-functions
-          (append (list #'my/org-ai-fill-paragraph)
-                  org-ai-optional-fill-paragraph-functions))
+(setq oai-optional-fill-paragraph-functions
+          (append (list #'my/oai-fill-paragraph)
+                  oai-optional-fill-paragraph-functions))
 
-(keymap-set org-mode-map \"M-q\" #'org-ai-optional-fill-paragraph)
+(keymap-set org-mode-map \"M-q\" #'oai-optional-fill-paragraph)
 "
   (interactive (progn
 		 (barf-if-buffer-read-only)
@@ -237,7 +255,7 @@ Usage:
             my/org-fill-paragraph-functions))
 
 
-(defmacro org-ai-optional--apply-to-region-lines (func start end &rest args)
+(defmacro oai-optional--apply-to-region-lines (func start end &rest args)
   "Apply FUNC to each line in region from START to END with ARGS.
 START and END is a pointer. FUNC is called with
 (line-start line-end . ARGS) for each line.
@@ -256,7 +274,7 @@ Executed inside `save-excursion'."
            (forward-line 1)))))))
 
 
-(defun org-ai-optional-block-fill-paragraph (&optional justify region)
+(defun oai-optional-block-fill-paragraph (&optional justify region)
   "Fill every line as paragraph in the current Org AI block.
 Ignoring code blocks that start with '```sometext' and end with '```'."
   (interactive (progn
@@ -264,7 +282,7 @@ Ignoring code blocks that start with '```sometext' and end with '```'."
                  (list (when current-prefix-arg 'full) t)))
   ;; inspired by `org-fill-element'
   (with-syntax-table org-mode-transpose-word-syntax-table
-    (let ((element (org-ai-block-p)))
+    (let ((element (oai-block-p)))
       (when (and element (string-equal "ai" (org-element-property :type element)))
         ;; Determine the boundaries of the content
         (let ((beg (org-element-contents-begin element)) ; first line of content
@@ -284,17 +302,17 @@ Ignoring code blocks that start with '```sometext' and end with '```'."
                     (if (re-search-forward "^[ \t\f]*```[ \t\f]*$" end t) ; ex. "    ```      "
                         (progn
                           (setq block-end (copy-marker (line-beginning-position)))
-                          (org-ai-optional--apply-to-region-lines #'fill-region-as-paragraph beg (marker-position block-start) justify)
+                          (oai-optional--apply-to-region-lines #'fill-region-as-paragraph beg (marker-position block-start) justify)
                           (goto-char (marker-position block-end))
                           (forward-line 1)
                           (setq beg (point)))
                       ;; else - not found end of block
                       (set-marker block-start nil)))
                 ;; else - no block - apply to every line
-                (org-ai-optional--apply-to-region-lines #'fill-region-as-paragraph beg end justify)
+                (oai-optional--apply-to-region-lines #'fill-region-as-paragraph beg end justify)
                 (setq beg end)))
-            ;; (print "my/org-ai-fill-paragraph return t")
+            ;; (print "my/oai-fill-paragraph return t")
             t))))))
 ;;; provide
-(provide 'org-ai-optional)
-;;; org-ai-optional.el ends here
+(provide 'oai-optional)
+;;; oai-optional.el ends here

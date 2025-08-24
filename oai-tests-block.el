@@ -1,6 +1,6 @@
 ; -*- lexical-binding: t -*-
 (require 'ert)             ; Testing framework
-(require 'org-ai-block)
+(require 'oai-block)
 
 ;; (eval-buffer) or (load-file "path/to/async-tests.el")
 ;; Running Tests: Load the test file and run:
@@ -12,13 +12,13 @@
 
 ;;; Helper function to set up a temporary Org buffer for testing.
 ;; It inserts content and optional Org properties, then returns the
-;; parsed Org-AI block element and its parameters alist.
-(defun org-ai-test-setup-buffer (block-content &optional properties-alist)
+;; parsed Oai block element and its parameters alist.
+(defun oai-test-setup-buffer (block-content &optional properties-alist)
   "Create a temporary Org buffer with BLOCK-CONTENT and optional PROPERTIES-ALIST.
 PROPERTIES-ALIST should be an alist like '((property-name . \"value\")).
-Returns a list (ELEMENT INFO-ALIST), where ELEMENT is the parsed Org-AI block
+Returns a list (ELEMENT INFO-ALIST), where ELEMENT is the parsed Oai block
 and INFO-ALIST is the parameters from its header."
-  (let ((buf (generate-new-buffer "*org-ai-test-temp*")))
+  (let ((buf (generate-new-buffer "*oai-test-temp*")))
     (with-current-buffer buf
       (org-mode)
       (setq-local org-export-with-properties t) ; Ensure properties are considered
@@ -36,12 +36,12 @@ and INFO-ALIST is the parameters from its header."
         element))))
 
 
-(defun org-ai-test-setup-buffer (block-content &optional properties-alist)
+(defun oai-test-setup-buffer (block-content &optional properties-alist)
   "Create a temporary Org buffer with BLOCK-CONTENT and optional PROPERTIES-ALIST.
 PROPERTIES-ALIST should be an alist like '((property-name . \"value\")).
-Returns a list (ELEMENT INFO-ALIST), where ELEMENT is the parsed Org-AI block
+Returns a list (ELEMENT INFO-ALIST), where ELEMENT is the parsed Oai block
 and INFO-ALIST is the parameters from its header."
-  (let ((buf (generate-new-buffer "*org-ai-test-temp*")))
+  (let ((buf (generate-new-buffer "*oai-test-temp*")))
     (with-current-buffer buf
       (org-mode)
       (setq-local org-export-with-properties t) ; Ensure properties are considered
@@ -59,30 +59,30 @@ and INFO-ALIST is the parameters from its header."
       (beginning-of-line) ; Ensure point is at the start of the block
       (let* ((element (org-element-at-point)))
         (unless (eq (org-element-type element) 'special-block)
-          (error "No valid Org-AI block found at point"))
+          (error "No valid Oai block found at point"))
         element)) ; return
         ))
 
 
-(org-ai-test-setup-buffer "#+begin_ai\nTest content\n#+end_ai")
+(oai-test-setup-buffer "#+begin_ai\nTest content\n#+end_ai")
 
 ;;; --- Test Cases ---
 
 ;; - test for test
 
-(ert-deftest test-setup-buffer-basic ()
-  "Test that org-ai-test-setup-buffer sets up a buffer correctly."
+(ert-deftest oai-tests-block--setup-buffer-basic-test ()
+  "Test that oai-test-setup-buffer sets up a buffer correctly."
   (let* ((block-content "#+begin_ai\nTest content\n#+end_ai")
-         (element (org-ai-test-setup-buffer block-content)))
+         (element (oai-test-setup-buffer block-content)))
     (should (eq (org-element-type element) 'special-block))
     (should (equal (org-element-property :type element) "ai"))))
 
-;; - org-ai-block--let-params
+;; - oai-block--let-params
 
-(ert-deftest org-ai-block--let-params-all-from-info-test ()
+(ert-deftest oai-tests-block--let-params-all-from-info-test ()
   "Test when all parameters are provided in the block header (info alist)."
   (let* ((test-block "#+begin_ai :stream t :sys \"A helpful LLM.\" :max-tokens 50 :model \"gpt-3.5-turbo\" :temperature 0.7\n#+end_ai\n")
-       (element (org-ai-test-setup-buffer test-block))
+       (element (oai-test-setup-buffer test-block))
        (info)
        (marker (copy-marker (org-element-property :contents-end element)))
        (buffer (org-element-property :buffer element))
@@ -92,8 +92,8 @@ and INFO-ALIST is the parameters from its header."
 
           ;; Position point inside the block for correct context, though not strictly needed for info directly.
           (goto-char (org-element-property :begin element))
-          (setq info (org-ai-block-get-info))
-          (org-ai-block--let-params info ((stream) (sys) (max-tokens :type integer) (model) (temperature :type float) (unknown "s"))
+          (setq info (oai-block-get-info))
+          (oai-block--let-params info ((stream) (sys) (max-tokens :type integer) (model) (temperature :type float) (unknown "s"))
                                          ;; (print (list max-tokens (type-of max-tokens)))
                                          ;; (print (list temperature (type-of temperature)))
                                          ;; (print (list unknown (type-of unknown)))
@@ -106,17 +106,15 @@ and INFO-ALIST is the parameters from its header."
                                          ))
     (kill-buffer buffer))))
 
-;; - org-ai-interface-step1
-
-;; (defun org-ai-block--org-ai-api-request-prepare (req-type content element sys-prompt sys-prompt-for-all-messages model max-tokens top-p temperature frequency-penalty presence-penalty service stream)
+;; (defun oai-block--oai-restapi-request-prepare (req-type content element sys-prompt sys-prompt-for-all-messages model max-tokens top-p temperature frequency-penalty presence-penalty service stream)
 ;;   )
 
-(ert-deftest org-ai-block--org-ai-agent-call-test ()
+(ert-deftest oai-tests-block--oai-agent-call-test ()
 
   (let* ((test-block "#+begin_ai :stream t :sys \"A helpful LLM.\" :max-tokens 50 :model \"gpt-3.5-turbo\" :temperature 0.7\n\n#+end_ai\n")
-         (org-ai-agent-call #'org-ai-block--org-ai-api-request-prepare)
+         (oai-agent-call #'oai-block--oai-restapi-request-prepare)
          ;; - setup test buffer
-         (element (org-ai-test-setup-buffer test-block))
+         (element (oai-test-setup-buffer test-block))
          (info)
          (marker (copy-marker (org-element-property :contents-end element)))
          (buffer (org-element-property :buffer element))
@@ -127,7 +125,7 @@ and INFO-ALIST is the parameters from its header."
           (goto-char (org-element-property :begin element))
           ;; (print (list "element" (org-element-property :contents-begin element)))
 
-          (let ((org-ai-agent-call (lambda (req-type element sys-prompt sys-prompt-for-all-messages model max-tokens top-p temperature frequency-penalty presence-penalty service stream)
+          (let ((oai-agent-call (lambda (req-type element sys-prompt sys-prompt-for-all-messages model max-tokens top-p temperature frequency-penalty presence-penalty service stream)
                                      (print (list 'req-type (type-of req-type) req-type))
                                      (print (list 'element (type-of element) element))
                                      (print (list 'sys-prompt (type-of sys-prompt) sys-prompt))
@@ -157,9 +155,9 @@ and INFO-ALIST is the parameters from its header."
                                                   ;; (string-equal stream "t"))
                                      ;; (print (list req-type content element sys-prompt sys-prompt-for-all-messages model max-tokens top-p temperature frequency-penalty presence-penalty service stream))
                                      )))
-            (org-ai-ctrl-c-ctrl-c)
+            (oai-ctrl-c-ctrl-c)
             )
-          ;; (org-ai-interface-step1)
+          ;; (oai-interface-step1)
 
       (kill-buffer buffer)
       )
@@ -169,10 +167,10 @@ and INFO-ALIST is the parameters from its header."
   )
 
 
-;; (ert-deftest org-ai-block--let-params-inherited-properties ()
+;; (ert-deftest oai-tests-block--let-params-inherited-properties ()
 ;;   "Test when parameters are sourced from inherited Org properties."
 ;;   (let* ((test-block "#+begin_ai\n#+end_ai\n") ; No parameters in block header
-;;          (setup-result (org-ai-test-setup-buffer test-block
+;;          (setup-result (oai-test-setup-buffer test-block
 ;;                                                  '((model . "text-davinci-003")
 ;;                                                    (max-tokens . "100")
 ;;                                                    (temperature . "0.5")
@@ -185,8 +183,8 @@ and INFO-ALIST is the parameters from its header."
 ;;           ;; Position point inside the block for `org-entry-get-with-inheritance`
 ;;           (goto-char (org-element-property :begin element))
 ;;           (setq evaluated-result
-;;                 (org-ai-test-eval-macro
-;;                  '(org-ai-block--let-params info
+;;                 (oai-test-eval-macro
+;;                  '(oai-block--let-params info
 ;;                                             ((stream nil) ; default `nil`
 ;;                                              (sys nil)    ; no default, inherited from property
 ;;                                              (max-tokens nil :type number)
@@ -202,10 +200,10 @@ and INFO-ALIST is the parameters from its header."
 ;;     (should (equal (nth 4 evaluated-result) 0.5))) ; From inherited property, converted to number
 ;;   )
 
-;; (ert-deftest org-ai-block--let-params-default-form ()
+;; (ert-deftest oai-tests-block--let-params-default-form ()
 ;;   "Test when parameters fall back to default forms."
 ;;   (let* ((test-block "#+begin_ai\n#+end_ai\n") ; No block params, no inherited props
-;;          (setup-result (org-ai-test-setup-buffer test-block))
+;;          (setup-result (oai-test-setup-buffer test-block))
 ;;          (element (car setup-result))
 ;;          (info (cadr setup-result)) ; Empty info
 ;;          evaluated-result)
@@ -214,8 +212,8 @@ and INFO-ALIST is the parameters from its header."
 ;;         (with-current-buffer (marker-buffer (org-element-property :begin element))
 ;;           (goto-char (org-element-property :begin element))
 ;;           (setq evaluated-result
-;;                 (org-ai-test-eval-macro
-;;                  '(org-ai-block--let-params info
+;;                 (oai-test-eval-macro
+;;                  '(oai-block--let-params info
 ;;                     ((stream t) ; Default true
 ;;                      (sys "Default system prompt")
 ;;                      (max-tokens 200 :type number)
@@ -238,10 +236,10 @@ and INFO-ALIST is the parameters from its header."
 
 
 ;; To run these tests:
-;; 1. Save the code to an .el file (e.g., `org-ai-params-test.el`).
-;; 2. Open Emacs and load the file: `M-x load-file RET org-ai-tests2.el RET`.
+;; 1. Save the code to an .el file (e.g., `oai-params-test.el`).
+;; 2. Open Emacs and load the file: `M-x load-file RET oai-tests2.el RET`.
 ;; 3. Run all tests: `M-x ert RET t RET`.
-;;    Or run specific tests: `M-x ert RET org-ai-block--let-params-all-from-info RET`.
+;;    Or run specific tests: `M-x ert RET oai-block--let-params-all-from-info RET`.
 ;; OR
 ;; to run: emacs -batch -l ert -l pinyin-isearch.el -l pinyin-isearch-pinyin-tests.el -f ert-run-tests-batch-and-exit 2> out.log
 ;;  OR

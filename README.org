@@ -1,15 +1,16 @@
-* org-ai-core
-Refactored org-ai Emacs package that provide Org block for communication with LLMs APIs.
+* oai
+Emacs package that provide special Org `#+begin_ai` block for communication with LLMs APIs. Text oriented fork of org-ai.
 * files
-| File             | Purpose                         |
-|------------------+---------------------------------|
-| org-ai.el        | minor mode for Org and commands |
-| org-ai-block.el  | handling Org block              |
-| org-ai-openai.el | connections handling            |
+| File           | Purpose                                                     |
+|----------------+-------------------------------------------------------------|
+| oai.el         | minor Org oai-mode and `C-c C-c` request activation command |
+| oai-block.el   | handling ai block                                           |
+| oai-restapi.el | connections to REST API (OpenAI-compatible)                 |
 
-Not active:
-- org-ai-excluded-useful-staff.el
-- org-ai-tests.el
+* Connection configuration
+oai-restapi-con-token - "token-string" or '(:openai "token-string1" :deepseek "token-string2") or nil for reading from "~/.authinfo" or "~/.authinfo.gpg"
+
+oai-restapi-con-service - 'openai or 'deepseek or use parameter at block like this: ```#+begin_ai :service openai```
 * Supported services
 - OpenAI
 - Azure-OpenAI
@@ -17,19 +18,21 @@ Not active:
 - Anthropic
 - DeepSeek
 - Google
+- Github
 - Together
 
-org-ai-service file:org-aire/org-ai-openai.el:164
+
+oai-restapi-con-service file:org-aire/org-ai-openai.el:164
 * Configuration
-: git clone https://github.com/rksm/org-ai
+: git clone https://github.com/Anoncheg1/oai
 
 #+begin_src elisp :results none :exports code :eval no
-(add-to-list 'load-path "path/to/org-ai")
-(require 'org-ai)
-(add-hook 'org-mode-hook #'org-ai-mode) ; org-ai.el
-(setq org-ai-api-creds-token "xxx") ; org-ai-openai.el
+(add-to-list 'load-path "path/to/oai")
+(require 'oai)
+(add-hook 'org-mode-hook #'oai-mode) ; oai.el
+(setq org-ai-api-creds-token "xxx") ; oai-restapi.el
 #+end_src
-** How to use not supported service?
+** How to connect to not supported service? (TODO)
 Redefine functions: org-ai--openai-get-token-auth-source, org-ai--get-endpoint, org-ai--get-headers
 Set variables:
 #+begin_src elisp :results none :exports code :eval no
@@ -37,7 +40,7 @@ Set variables:
       (append org-ai-endpoints
               '((my-new-host "https://api.mynewhost.com/v1/chat/completions"))))
 ;; Optionally, set it as default
-(setq org-ai-service 'my-new-host)
+(setq oai-restapi-con-service 'my-new-host)
 #+end_src
 
 * Supported “[AI]:” in-text prefixes
@@ -56,9 +59,9 @@ Set variables:
 - :frequency-penalty
 - :presence-penalty
 - :service
-- :service together - symbol (org-ai-service)
+- :service together - symbol (oai-restapi-con-service)
 - :sys-everywhere - string (sys-prompt-for-all-messages) file:org-aire/org-ai.el:131
-- :chat :completion (org-ai--request-type) file:org-aire/org-ai-block.el:93
+- :chat :completion (org-ai--request-type) file:org-aire/oai-block.el:93
 
 file:org-aire/org-ai-openai.el:467 (org-ai-stream-completion function)
 * debugging
@@ -108,7 +111,7 @@ Example2 to remove empty lines after AI answer:
 
 (defun my/ai-postprocess (type content)
   (if (equal type 'end)
-      (let* ((context (org-ai-block-p))
+      (let* ((context (oai-block-p))
              (con-beg (org-element-property :contents-begin context))
              (con-end (org-element-property :contents-end context)))
         (org-ai-remove-distant-empty-lines con-beg con-end))))
@@ -120,7 +123,7 @@ Example2 to remove empty lines after AI answer:
 Note: text this text located between org-ai--current-insert-position-marker (point-marker) in current buffer.
 
 ** org-block functions
-- org-in-src-block-p = org-ai-block-p
+- org-in-src-block-p = oai-block-p
 * Tests
 #+begin_ai :max-tokens 150 :service together :model "meta-llama/Llama-3.3-70B-Instruct-Turbo-Free"
 How to live long?
