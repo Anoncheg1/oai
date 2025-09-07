@@ -104,7 +104,7 @@
 
 ;;; -=-= C-c C-c main interface
 
-(defcustom oai-agent-call #'oai-restapi-request-prepare ; oai-restapi.el
+(defcustom oai-agent-call-function #'oai-restapi-request-prepare ; oai-restapi.el
   "Pass processed ai block info to AI assistent or some Emacs agent.
 See `oai-call-block' and `oai-restapi-request-prepare' for parameters.
 TODO: pass callback for writing."
@@ -112,7 +112,7 @@ TODO: pass callback for writing."
   :group 'oai)
 
 (defun oai-ctrl-c-ctrl-c ()
-  "Main command for #+begin_ai."
+  "Main command for #+begin_ai. Org specification."
   (when-let ((element (oai-block-p))) ; oai-block.el
     (oai-call-block) ; here
     t))
@@ -134,57 +134,67 @@ TODO: pass callback for writing."
                                           oai-restapi-default-inject-sys-prompt-for-all-messages)) ; oai-restapi.el
          (sys-prompt (or (org-entry-get-with-inheritance "SYS") ; org
                          (oai-block--get-sys :info info ; oai-block.el
-                                          :default oai-restapi-default-chat-system-prompt)))) ; oai-restapi.el variable
+                                             :default oai-restapi-default-chat-system-prompt)))) ; oai-restapi.el variable
     ;; - Process Org params and call agent
     (oai-block--let-params info
-                              ;; format: (variable optional-default type)
-                              ((service oai-restapi-con-service string) ; oai-restapi.el
-                               (model (if (oai-restapi--get-value-or-string oai-restapi-con-model service)
-                                        ;; (oai-restapi--get-value-or-string org-ai-creds-completion-model service)
-                                      :type string)) ; oai-restapi.el
-                               (max-tokens oai-restapi-default-max-tokens :type number)
-                               (top-p nil :type number)
-                               (temperature nil :type number)
-                               (frequency-penalty nil :type number)
-                               (presence-penalty nil :type number)
-                               (stream "t" :type string)
-                               )
-                              (print (list "service" service (type-of service)))
-                              ;; - body with some Org "Post-parsing":
-                              ;; (print (list "SERVICE" service (stringp service) (org-ai--read-service-name service)))
-                              (let (
-                                    (service (or service
-                                                 oai-restapi-con-service)) ; default in oai-restapi.el
-                                    (stream (if (and stream (string-equal-ignore-case stream "nil"))
-                                                nil
-                                              ;; else
-                                              (oai-restapi--stream-supported service model))))
-                                ;; - main call
-                                (funcall oai-agent-call req-type element sys-prompt sys-prompt-for-all-messages ; message
-                                         model max-tokens top-p temperature frequency-penalty presence-penalty service stream ; model params
-                                         )))))
+                           ;; format: (variable optional-default type)
+                           ((service oai-restapi-con-service string) ; oai-restapi.el
+                            (model (if (oai-restapi--get-value-or-string oai-restapi-con-model service)
+                                       ;; (oai-restapi--get-value-or-string org-ai-creds-completion-model service)
+                                       :type string)) ; oai-restapi.el
+                            (max-tokens oai-restapi-default-max-tokens :type number)
+                            (top-p nil :type number)
+                            (temperature nil :type number)
+                            (frequency-penalty nil :type number)
+                            (presence-penalty nil :type number)
+                            (stream "t" :type string)
+                            )
+                           (print (list "service" service (type-of service)))
+                           ;; - body with some Org "Post-parsing":
+                           ;; (print (list "SERVICE" service (stringp service) (org-ai--read-service-name service)))
+                           (let (
+                                 (service (or service
+                                              oai-restapi-con-service)) ; default in oai-restapi.el
+                                 (stream (if (and stream (string-equal-ignore-case stream "nil"))
+                                             nil
+                                           ;; else
+                                           (oai-restapi--stream-supported service model))))
+                             ;; - main call
+                             (condition-case err ; for `oai-block-tags-replace'
+                                 (funcall oai-agent-call-function req-type element sys-prompt sys-prompt-for-all-messages ; message
+                                          model max-tokens top-p temperature frequency-penalty presence-penalty service stream ; model params
+                                          )
+                               (user-error
+                                (funcall oai-restapi-show-error-function (error-message-string err)
+                                         (oai-block-get-header-marker element))))))))
 
 ;;; -=-= key M-x: oai-expand-block
 ;;;###autoload
-(defun oai-expand-block (&optional element)
+(defun oai-expand-block ()
   "Show a temp buffer with what the ai block expands to.
+If there is ai block at current position in current buffer.
 This is what will be sent to the api.  ELEMENT is the ai block.
 Like `org-babel-expand-src-block'.
 Set `help-window-select' variable to get focus."
   (interactive)
-  (let* ((element (or element (oai-block-p))) ; oai-block.el
-         (expanded (string-trim
-                    (oai-block-get-content element) ; oai-block.el
-                    ))
-         (expanded (oai-restapi--collect-chat-messages expanded))
-         (expanded (oai-restapi--modify-last-user-content expanded #'oai-block-tags-replace))
-         (expanded (oai-restapi--stringify-chat-messages expanded)))
-    (if (called-interactively-p 'any)
-        (let ((buf (get-buffer-create "*OAi Preview*")))
-          (with-help-window buf (with-current-buffer buf
-                                  (insert expanded)))
-          (switch-to-buffer buf))
-      expanded)))
+  (let  ((element (oai-block-p))) ; oai-block.el
+    (condition-case err
+        (let*( (expanded (string-trim
+                          (oai-block-get-content element) ; oai-block.el
+                          ))
+               (expanded (oai-restapi--collect-chat-messages expanded))
+               (expanded (oai-restapi--modify-last-user-content expanded #'oai-block-tags-replace))
+               (expanded (oai-restapi--stringify-chat-messages expanded)))
+          (if (called-interactively-p 'any)
+              (let ((buf (get-buffer-create "*OAi Preview*")))
+                (with-help-window buf (with-current-buffer buf
+                                        (insert expanded)))
+                (switch-to-buffer buf))
+            expanded))
+      (user-error
+       (print "wtf")
+       (funcall oai-restapi-show-error-function (error-message-string err)
+                (oai-block-get-header-marker element))))))
 
 ;;; -=-= key C-g: keyboard quit
 

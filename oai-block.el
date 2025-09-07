@@ -47,7 +47,10 @@
 ;; - element - "room" you are in (e.g., a paragraph) (TYPE PROPS) (org-element-at-point)
 ;; - context - "furniture" you are touching within that room (e.g., a bold word, a link). (TYPE PROPS) (org-element-context)
 ;; - org-dblock-start-re
-;; (org-element-property :begin  (oai-block-p)) return content begin, while for other Org elements it return header begining.
+;;
+;; Content begin-end
+;; (org-element-property :contents-begin  (oai-block-p)) return next line after #+begin
+;; (org-element-property :contents-end  (oai-block-p)) return #+end line position
 ;; may be fixed with org-element-put-property, but it is not KISS.
 
 ;;; Code:
@@ -246,18 +249,19 @@ A negative argument ARG = -N means move backward."
   (when-let* ((regions (oai-block--chat-role-regions))
               (start (cl-find-if (lambda (x) (>= (point) x)) (reverse regions)))
               (end (cl-find-if (lambda (x) (< (point) x)) regions)))
-    (oai--debug "oai-forward-section1 %s " (list start end))
+    (oai--debug "oai-forward-section1 %s %s" start end)
     (or arg (setq arg 1))
     (if (> arg 0)
         (goto-char end)
       ;; else - backward
       (let ((prev (cl-find-if (lambda (x) (>= (1- start) x)) (reverse regions))))
-        (oai--debug "oai-forward-section2 %s %s " (> (point) start) prev)
-        (if (and (> (point) start) ; if at the middle of first section
-                 (not prev))
-            (goto-char start)
-          ;; else
-          (goto-char (cl-find-if (lambda (x) (>= (1- start) x)) (reverse regions))))))))
+        (oai--debug "oai-forward-section2 %s %s %s" (>= (point) start) prev start)
+        (when  prev ;; (>= (point) start))
+          (if (and (> (point) start) ; if at the middle of first section
+                   (not prev))
+              (goto-char start)
+            ;; else
+            (goto-char (cl-find-if (lambda (x) (>= (1- start) x)) (reverse regions)))))))))
 
 (defun oai-kill-region-at-point (&optional arg)
   "Kills the prompt at point.
@@ -290,6 +294,13 @@ Use ELEMENT only in current moment in element buffer."
           (copy-marker (point))))))
 
 ;;; -=-= Result
+
+(defun oai-block-insert-result-message (message header-marker)
+  "Insert MESSAGE to #+RESULT of block in buffer of HEADER-MARKER."
+  (with-current-buffer (marker-buffer header-marker)
+    (save-excursion
+      (goto-char header-marker)
+      (oai-block-insert-result message))))
 
 (defun oai-block-insert-result (result &optional result-params hash exec-time)
   "Modified `org-babel-insert-result' function.

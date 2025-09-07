@@ -50,10 +50,13 @@ All lines are rarely required, first 4-8 are most imortant.")
 Otherwise ls command used.  Also `directory-files-and-attributes' may be
 used.")
 
-(defvar oai-block-tags-error-on-missing-link nil
+(defvar oai-block-tags-error-on-missing-link t
   "If non-nil signal error for not found link.
 Used to set `org-link-search-must-match-exact-headline' before
 `org-link-search' function call.")
+
+(defvar oai-block-tags--check-double-targets-found t
+  "Signal error if link in ai block point to targets in same file.")
 
 (cl-assert
   (equal (mapcar (lambda (s)
@@ -198,97 +201,129 @@ Handles symlinks, remote files (TRAMP), and buffers without files."
             (input-file  (file-truename (expand-file-name path))))
         (string= buffer-file input-file)))))
 
-(defun oai-block-tags--get-org-content-block (element)
-  "Return markdown block for LLM for current element at current position.
-Move pointer to the end of block."
-  (let ((beg (or (org-element-property :contents-begin element)
-                       (org-element-begin element)))
-              (end (or (org-element-property :contents-end element)
-                       (org-element-end element))))
-          (when (and beg end)
-            ;; - skip headers if begin at header
-            (save-excursion (goto-char beg)
-                            (when (looking-at "#\\+begin_")
-                              (forward-line)
-                              (setq beg (point)))
-                            (goto-char end)
-                            (when (or (looking-at "#\\+end_")
-                                      (search-backward "#+end_" nil beg))
-                              (forward-line -1)
-                              (setq end (line-end-position))))
+(defun oai-block-tags--get-org-content-block-region (&optional element)
+  "Return (beg end) list for any Org block ELEMENT or nil.
+Works for ai block also."
+  (when-let* ((blocks-types '(comment-block center-block dynamic-block example-block
+                                            export-block quote-block special-block
+                                            src-block verse-block))
+              (element
+               (cl-loop with context = (or element (org-element-context))
+                        while (and context
+                                   (not (member (org-element-type context) blocks-types)))
+                        do (setq context (org-element-property :parent context))
+                        finally return context)))
+    (let ((beg (or (org-element-property :contents-begin element)
+                   (org-element-begin element)))
+          (end (or (org-element-property :contents-end element)
+                   (org-element-end element))))
+      (when (and beg end)
+        ;; - skip headers if begin at header
+        (save-excursion (goto-char beg)
+                        (when (or (looking-at "#\\+begin_")
+                                  (search-forward "#+begin_" end t))
+                          (forward-line)
+                          (setq beg (point)))
+                        (goto-char end)
+                        (when (or (looking-at "#\\+end_")
+                                  (search-backward "#+end_" beg t))
+                          (forward-line -1)
+                          (setq end (line-end-position)))))
+      (list beg end))))
 
-            ;; Compose result block
-            (goto-char end) ; for return
-            (concat
-             ;; - Header ```
-             (if (eq (org-element-type element) 'src-block)
-                 (concat "```"  (org-element-property :language element) "\n")
-               ;; else
-               "```text\n")
-             ;; - Body
-             (string-trim (buffer-substring-no-properties beg
-                                                          end))
-             ;; - Footer ```
-             "\n```\n")
-            )))
+
+(defun oai-block-tags--get-org-content-block (&optional element)
+  "Return markdown block for LLM for current element at current position.
+Move pointer to the end of block.
+`org-babel-read-element' from ob-core.el"
+  (when-let* ((region (oai-block-tags--get-org-content-block-region element))
+              (beg (car region))
+              (end (cadr region)))
+    ;; Compose result block
+    (goto-char end) ; for return
+    (concat
+     ;; - Header ```
+     (if (eq (org-element-type element) 'src-block)
+         (concat "```"  (org-element-property :language element) "\n")
+       ;; else
+       "```text\n")
+     ;; - Body
+     (string-trim (buffer-substring-no-properties beg
+                                                  end))
+     ;; - Footer ```
+     "\n```\n")
+    ))
 
 (defun oai-block-tags--get-org-content ()
   "Return markdown block for LLM for current element at current position.
+May return nil.
 For Org buffer only.
 Supported: blocks and headers.
 Move pointer to the end of block."
   (let* ((element (org-element-context))
-         (type (org-element-type element))
-         (blocks-types '(comment-block center-block dynamic-block example-block
-                                       export-block quote-block special-block
-                                       src-block verse-block)))
-      (cond
-       ;; - blocks type
-       ((member type  blocks-types)
-        (oai-block-tags--get-org-content-block element))
+         (type (org-element-type element)))
        ;; - headline type
-       ((eq type 'headline)
-        (let ((org-element-end (org-element-at-point))
-              (res "")
-              el
-              type
-              )
-          (while (< (point) (org-element-end element))
-            ;; (print "vv")
-            (setq el (org-element-context))
-            (setq type (org-element-type el))
-            (setq res (concat res
-                              (cond ((eq type 'headline)
-                                     ;; (print "hh")
-                                     (prog1 (concat (make-string (org-element-property :level el) ?#) " " (org-element-property :raw-value el) "\n")
-                                       (forward-line)))
-                                    ((member type  blocks-types)
-                                     ;; (print "bb")
-                                     (prog1 (oai-block-tags--get-org-content-block el)
-                                       ;; (condition-case nil
-                                           (org-forward-element)
-                                           ;; (org-next-item)
-                                         ;; (error nil))
-                                       ))
-                                    (t
-                                     ;; (print "t")
-                                     (prog1
-                                          (concat (buffer-substring-no-properties (line-beginning-position) (org-element-end el)) "\n")
-                                       ;; (condition-case nil
-                                           (org-forward-element)
-                                           ;; (org-next-item)
-                                         ;; (error nil))
-                                       )))))
-                  )
-          res
-          )))))
+       (if (eq type 'headline)
+           (let ((org-element-end (org-element-at-point))
+                 (res "")
+                 el
+                 type
+                 )
+             ;; loop over headlines, blocks and just some org elements.
+             (while (< (point) (org-element-end element))
+               ;; (print "vv")
+               (setq el (org-element-context))
+               (setq type (org-element-type el))
+               (setq res (concat res
+                                 (cond ((eq type 'headline)
+                                        ;; (print "hh")
+                                        (prog1 (concat (make-string (org-element-property :level el) ?#) " " (org-element-property :raw-value el) "\n")
+                                          (forward-line)))
+                                       ((member type  blocks-types)
+                                        ;; (print "bb")
+                                        (prog1 (oai-block-tags--get-org-content-block el)
+                                          ;; (condition-case nil
+                                          (org-forward-element)
+                                          ;; (org-next-item)
+                                          ;; (error nil))
+                                          ))
+                                       (t
+                                        ;; (print "t")
+                                        (prog1
+                                            (concat (buffer-substring-no-properties (line-beginning-position) (org-element-end el)) "\n")
+                                          ;; (condition-case nil
+                                          (org-forward-element)
+                                          ;; (org-next-item)
+                                          ;; (error nil))
+                                          )))))
+               )
+             res
+             )
+        ;; else - block maybe?
+         (oai-block-tags--get-org-content-block))
+        ))
+
+(defun oai-block-tags--org-search-local (link type path)
+  (if (equal type "radio")
+      (org-link--search-radio-target path)
+    ;; else - fuzzy, custom-di, coderef
+    (let ((org-link-search-must-match-exact-headline oai-block-tags-error-on-missing-link)) ;; should found?
+      (org-link-search
+       (pcase type
+	 ("custom-id" (concat "#" path))
+	 ("coderef" (format "(%s)" path))
+	 (_ path))
+       ;; Prevent fuzzy links from matching themselves.
+       (and (equal type "fuzzy")
+	    (+ 2 (org-element-begin link)))))))
 
 (defun oai-block-tags--get-replacement-for-org-link (link-string)
   "Return replacement for org-link  string or nil.
 Supported:
 - file with name of block,
 - directory
-- local link."
+- local link.
+Use current buffer, current position to output error to result of block if two targets found."
   ;; `org-link-open' for type and opening,  `org-link-search' for search in current buffer.
 
   ;; from `org-link-open-from-string'
@@ -305,7 +340,7 @@ Supported:
     ;; 2) extract path and type
     (let ((type (org-element-property :type link))
           (path (org-element-property :path link)))
-      ;; (print (list "type?" type path))
+      (print (list "type?" type path))
       (pcase type
         ("file" ; org-link-search
          (let* ((option (org-element-property :search-option link))) ;; nil if no ::, may be "" if after :: there is empty last part
@@ -324,23 +359,40 @@ Supported:
            ))
 
         ;; ((or "coderef" "custom-id" "fuzzy" "radio")
-        (or "radio" "fuzzy"
-            (save-excursion
-              (org-with-wide-buffer
-               (if (equal type "radio")
-	           (org-link--search-radio-target path)
-                 ;; else - fuzzy, custom-di, coderef
-                 (let ((org-link-search-must-match-exact-headline oai-block-tags-error-on-missing-link))
-                   (org-link-search
-	            (pcase type
-	              ("custom-id" (concat "#" path))
-	              ("coderef" (format "(%s)" path))
-	              (_ path))
-	            ;; Prevent fuzzy links from matching themselves.
-	            (and (equal type "fuzzy")
-	                 (+ 2 (org-element-begin link)))))
-                 )
-               (oai-block-tags--get-org-content)))
+        ((or "radio" "fuzzy")
+         (save-excursion
+           (org-with-wide-buffer
+            (let ((ln-before (line-number-at-pos))
+                  found
+                  p)
+              ;; 1) move pointer to search result
+              (setq found (oai-block-tags--org-search-local link type path))
+              (setq p (point))
+              (print (list "found" found (point)))
+              ;; 1.1) several targets with same name exist?
+              (when (and oai-block-tags--check-double-targets-found
+                         (eq found 'dedicated)
+                         (not (eq (line-number-at-pos) ln-before))) ; found?
+                (let ((ln-found (line-number-at-pos))
+                      oai-block-tags-error-on-missing-link)
+                  (with-restriction (line-end-position) (point-max)
+                    (setq found (oai-block-tags--org-search-local link type path)))
+                  (when (and (not (eq (line-number-at-pos) ln-found)) ; found?
+                             (eq found 'dedicated))
+                    ;; (print (list (line-number-at-pos) ln-found (progn (forward-line ln-found)
+                    ;;                                                   (buffer-substring-no-properties (line-beginning-position) (line-end-position)))))
+                    (user-error "Two targets found for link %s\n- %s: %s\n- %s: %s" link-string
+                                (line-number-at-pos) (buffer-substring-no-properties (line-beginning-position) (line-end-position))
+                                ln-found (progn (forward-line (- ln-found (line-number-at-pos)))
+                                                (buffer-substring-no-properties (line-beginning-position) (line-end-position))))
+                    )))
+              ;;     (print (point))
+              ;;     )
+              ;; 2) extract content
+              (print (list "found2" (point)))
+              (goto-char p)
+              (oai-block-tags--get-org-content)
+              ))))
          ;; (save-excursion
          ;;   (org-with-wide-buffer
 	 ;;    (if (equal type "radio")
@@ -356,7 +408,7 @@ Supported:
 	 ;;    ;; (point)
          ;;    (get-org-block-content-in-current-buffer) ; return block
          ;;    ))
-         )))))
+         ))))
 
 ;; (oai-block-tags--get-replacement-for-org-link  "[[xx]]")
 

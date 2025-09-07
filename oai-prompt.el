@@ -142,81 +142,100 @@ answers except of the first one are already in block-content."
 
 
 
+(defun oai-prompt-request-switch (&rest args)
+  "For assiging to `oai-agent-call-function'."
+  ;; element = (nth 1 args)
+  (when (not (eql 'x (alist-get :chain (oai-block-get-info (nth 1 args)) 'x)))
+      (apply #'oai-prompt-request-chain args)
+      t))
+
+    ;; (oai--debug "ELSE")
+    ;; (apply #'oai-restapi-request-prepare args)))
+
+
 (defun oai-prompt-request-chain (req-type element sys-prompt sys-prompt-for-all-messages model max-tokens top-p temperature frequency-penalty presence-penalty service stream)
-  "Check :pag parameter and use :step to execute chain of prompt.
+  "Use :chain parameter to activate and use :step to execute chain of prompt.
 Aspects:
 1) start and stop reporter at begining and at the end (final callback).
 2) error handling: kill reporter, kill tmp buffer, kill timers"
   (oai--debug "oai-prompt-agent-request-prepare1 service, model: %s %s" service model)
 
-  (if (not (eql 'x (alist-get :my (oai-block-get-info element) 'x))) ; check if :my exist
-      ;; - My request
-      (let ((service (or service 'github))
-            (end-marker (oai-block--get-content-end-marker element))
-            (header-marker (oai-block-get-header-marker element))
-            ;; (gap-between-requests 3) ; TODO
-            (buffer-key (get-buffer-create "*oai--chain-tmp*" t)) ; use one buffer as for updating global notification timer
-            (step (alist-get :step (oai-block-get-info element)))
-            )
+  ;; (if (not (eql 'x (alist-get :chain (oai-block-get-info element) 'x))) ; check if :my exist
+  ;; - My request
+  (let ((service (or service 'github))
+        (end-marker (oai-block--get-content-end-marker element))
+        (header-marker (oai-block-get-header-marker element))
+        ;; (gap-between-requests 3) ; TODO
+        (buffer-key (get-buffer-create "*oai--chain-tmp*" t)) ; use one buffer as for updating global notification timer
+        (step (alist-get :step (oai-block-get-info element))) ; Works? not tested
+        )
 
-        (let (
-            (callbackmy (lambda (data callback)
-                          (when data ; if not data it is fail
-                            (oai--debug "calbackmy")
-                            (oai-restapi--insert-single-response end-marker (concat "[AI]: " data) nil 'final)
-                            (run-at-time 0 nil callback data)
-                            (oai-timers--progress-reporter-run #'oai-restapi--stop-tracking-url-request))))
-            (calbafin (lambda (data callback)
+    (let (
+          (callbackmy (lambda (data callback)
                         (when data ; if not data it is fail
-                          (oai--debug "calbafin")
-                          (oai-restapi--insert-single-response end-marker (concat "[AI]: " data))
-                          (oai-restapi--insert-single-response end-marker nil 'insertrole 'final) ; finalize
-                          (oai-timers--interrupt-current-request (oai-timers--get-keys-for-variable header-marker) #'oai-restapi--stop-tracking-url-request)
-                          (oai-timers--interrupt-current-request buffer-key #'oai-restapi--stop-tracking-url-request))))
-            (call (lambda (step)
-                    (lambda (data callback)
-                      (oai--debug "oai-prompt-agent-request-prepare-call step %s" step)
-                      (oai--debug "oai-prompt-agent-request-prepare-call max-tokens %s header-marker %s sys-prompt %s" max-tokens header-marker sys-prompt )
-                      ;; also save request for timer
-                      (oai-restapi-request-llm-retries service
-                                                      model
-                                                      oai-timers-duration
-                                                      callback
-                                                      :retries 3
-                                                      :messages (oai-prompt-collect-chat-research-steps-prompt oai-prompt-chain-list
-                                                                                                       step
-                                                                                                       (with-current-buffer (marker-buffer header-marker) (string-trim (oai-block-get-content (oai-block-element-by-marker header-marker))))
-                                                                                                       sys-prompt
-                                                                                                       max-tokens)
-                                                      :max-tokens max-tokens
-                                                      :header-marker header-marker
-                                                      :temperature temperature
-                                                      :top-p top-p
-                                                      :frequency-penalty frequency-penalty
-                                                      :presence-penalty presence-penalty)))))
+                          (oai--debug "calbackmy")
+                          (oai-restapi--insert-single-response end-marker (concat "[AI]: " data) nil 'final)
+                          (run-at-time 0 nil callback data)
+                          (oai-timers--progress-reporter-run #'oai-restapi--stop-tracking-url-request))))
+          (calbafin (lambda (data callback)
+                      (when data ; if not data it is fail
+                        (oai--debug "calbafin")
+                        (oai-restapi--insert-single-response end-marker (concat "[AI]: " data))
+                        (oai-restapi--insert-single-response end-marker nil 'insertrole 'final) ; finalize
+                        (oai-timers--interrupt-current-request (oai-timers--get-keys-for-variable header-marker) #'oai-restapi--stop-tracking-url-request)
+                        (oai-timers--interrupt-current-request buffer-key #'oai-restapi--stop-tracking-url-request))))
+          (call (lambda (step)
+                  (lambda (data callback)
+                    (oai--debug "oai-prompt-agent-request-prepare-call step %s" step)
+                    (oai--debug "oai-prompt-agent-request-prepare-call buffer %s" (current-buffer))
+                    (oai--debug "oai-prompt-agent-request-prepare-call max-tokens %s header-marker %s sys-prompt %s" max-tokens header-marker sys-prompt )
+                    ;; also save request for timer
+                    (condition-case err ; for `oai-block-tags-replace'
+                        (oai-restapi-request-llm-retries service
+                                                         model
+                                                         oai-timers-duration
+                                                         callback
+                                                         :retries 3
+                                                         :messages
+                                                         (oai-prompt-collect-chat-research-steps-prompt oai-prompt-chain-list
+                                                                                                        step
+                                                                                                        (with-current-buffer (marker-buffer header-marker) (string-trim (oai-block-get-content (oai-block-element-by-marker header-marker))))
+                                                                                                        sys-prompt
+                                                                                                        max-tokens)
+                                                         :max-tokens max-tokens
+                                                         :header-marker header-marker
+                                                         :temperature temperature
+                                                         :top-p top-p
+                                                         :frequency-penalty frequency-penalty
+                                                         :presence-penalty presence-penalty)
+                      (user-error
+                       (funcall oai-restapi-show-error-function (error-message-string err)
+                                header-marker)))
+                    ))))
 
 
-        (oai--debug "oai-prompt-agent-request-prepare2 %s %s %s %s" header-marker service model oai-timers-duration)
-        ;;
-        (oai-async1-start nil
-                           (list (funcall call 0)
-                                 callbackmy
-                                 (funcall call 1)
-                                 callbackmy
-                                 (funcall call 2)
-                                 calbafin
-                                 ))
-          ;; Global reporter uppdated and run all the time.
-          ;; Every task have own timer for parallel requests to retry them.
-          ;; 1) save request for timer
-          (oai-timers--set buffer-key header-marker)
-          ;; 2) run global reporter
-          (oai-timers--progress-reporter-run #'oai-restapi--stop-tracking-url-request (* oai-timers-duration 3) )))
+      (oai--debug "oai-prompt-agent-request-prepare2 %s %s %s %s" header-marker service model oai-timers-duration)
+      ;;
+      (oai-async1-start nil
+                        (list (funcall call 0)
+                              callbackmy
+                              (funcall call 1)
+                              callbackmy
+                              (funcall call 2)
+                              calbafin
+                              ))
+      ;; Global reporter uppdated and run all the time.
+      ;; Every task have own timer for parallel requests to retry them.
+      ;; 1) save request for timer
+      (oai-timers--set buffer-key header-marker)
+      ;; 2) run global reporter
+      (oai-timers--progress-reporter-run #'oai-restapi--stop-tracking-url-request (* oai-timers-duration 3) )))
 
-      ;; - else - built-in
-      (oai--debug "ELSE")
-      (oai-restapi-request-prepare req-type element sys-prompt sys-prompt-for-all-messages model max-tokens top-p temperature frequency-penalty presence-penalty service stream)
-  ))
+  ;;     ;; - else - built-in
+  ;;     (oai--debug "ELSE")
+  ;;     (oai-restapi-request-prepare req-type element sys-prompt sys-prompt-for-all-messages model max-tokens top-p temperature frequency-penalty presence-penalty service stream)
+  ;; )
+)
 
 
 ;;; provide

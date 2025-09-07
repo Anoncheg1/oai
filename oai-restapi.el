@@ -271,11 +271,6 @@ messages."
   :type 'string
   :group 'oai)
 
-(defcustom oai-restapi-show-error-in-result t
-  "If non-nil, show error in #+RESULTS of block, otherwise in a buffer."
-  :type 'boolean
-  :group 'oai)
-
 ;; (defvar org-ai--last-url-request-buffer nil
 ;;   "Internal var that stores the current request buffer.
 ;; For stream responses.
@@ -348,7 +343,7 @@ Used for hook only.")
 ;;    (goto-char (cadr (nth n org-ai--debug-data-raw)))
 ;;    (beginning-of-line)))
 
-;;; -=-= debugging
+;;; -=-= Debugging
 (defun oai-restapi--prettify-json-string (json-string)
   "Convert a compact JSON string to a prettified JSON string.
 This function uses a temporary buffer to perform the prettification.
@@ -386,6 +381,48 @@ Argument SOURCE-BUF url-http response buffer."
             (insert stri)
             (newline))))
       )))
+
+;;; -=-= Show error
+(defcustom oai-restapi-show-error-function 'oai-block-insert-result-message
+  "Function to display error in oai-restapi about internal and remote errors.
+Available choices include:
+- `oai-block-insert-result-message' accept message and header-marker parameters.
+To  use  url-buffer,  get header-marker  with  (oai-timers--get-variable
+url-buffer), hence every url-buffer key bound to some ai block variable.
+- `oai-restapi--show-error' ignore header-marker parameter.
+Or provide your own function."
+  :type 'function
+  :options '(oai-block-insert-result-message oai-restapi--show-error)
+  :group 'oai)
+
+;; (defun oai-restapi-insert-result-error (message url-buffer)
+;;     (oai-block-insert-result-message message
+;;                                      (oai-timers--get-variable url-buffer)))
+
+;; (defcustom oai-restapi-show-error-in-result t
+;;   "If non-nil, show error in #+RESULTS of block, otherwise in a buffer."
+;;   :type 'boolean
+;;   :group 'oai)
+
+
+(defun oai-restapi--show-error (error-message &rest args) ; header-marker ignored
+  "Show an error message in a buffer.
+`ERROR-MESSAGE' is the error message to show."
+  (condition-case nil
+      (let ((buf (get-buffer-create "*oai error*")))
+        (with-current-buffer buf
+          (read-only-mode -1)
+          (erase-buffer)
+          (insert "Error from the service API:\n\n")
+          (insert error-message)
+          (display-buffer buf)
+          (goto-char (point-min))
+          (toggle-truncate-lines -1)
+          (read-only-mode 1)
+          ;; close buffer when q is pressed
+          (local-set-key (kbd "q") (lambda () (interactive) (kill-buffer)))
+          t))
+    (error nil)))
 
 ;;; -=-= Get constant functions
 (defun oai-restapi--check-model (model endpoint)
@@ -1072,7 +1109,6 @@ For not stream url return event and hook after-change-functions
       url-request-buffer)))
 
 
-
 (cl-defun oai-restapi-request-llm (service model callback &optional &key prompt messages max-tokens temperature top-p frequency-penalty presence-penalty)
   "Simplified version of `oai-restapi-request' without stream support.
 Used for building agents or chain of requests.
@@ -1092,10 +1128,9 @@ Call callback with nil or result of `oai-restapi--normalize-response' of respons
 					   :stream nil)))
     (oai--debug "oai-restapi-request-llm prompt: %s" prompt)
     (oai--debug "oai-restapi-request-llm messages: %s" messages)
+    ;; (oai--debug "oai-restapi-request-llm messages2: %s" (oai-restapi--modify-last-user-content messages #'oai-block-tags-replace))
     (oai--debug "oai-restapi-request-llm endpoint: %s %s" endpoint (type-of endpoint))
     (oai--debug "oai-restapi-request-llm request-data:" (oai-restapi--prettify-json-string url-request-data))
-
-
 
     (let* ((url-request-buffer
            (url-retrieve ; <- - - - - - - - -  MAIN
@@ -1173,7 +1208,12 @@ In callback we add cancel timer function.
 We save and cancel time only in callback.
 TIMER is time to wait for one request."
   (oai--debug "oai-restapi-request-llm-retries1 timeout %s" timeout)
-  (let ((cb (current-buffer)))
+  (let ((cb (current-buffer))
+        ;; apply tags
+        (messages (with-current-buffer (marker-buffer header-marker)
+                    (oai-restapi--modify-last-user-content
+                     messages
+                     #'oai-block-tags-replace))))
     (if (or (and retries (> retries 0)) ; just in case
             (not retries))
         (with-temp-buffer ; to separate variable `oai-restapi-request-llm-retries-local-url-buffer'
@@ -1201,10 +1241,9 @@ TIMER is time to wait for one request."
                                               ;; else - failed
                                               ;; (oai-timers--remove-variable header-marker) ;?
                                               (run-at-time 0 nil callback nil)
-                                              (with-current-buffer (marker-buffer header-marker)
-                                                  (save-excursion
-                                                    (goto-char header-marker)
-                                                    (oai-block-insert-result "Failed")))
+
+                                              (oai-block-insert-result-message "Failed" header-marker)
+
                                               (oai-timers--update-global-progress-reporter)
                                               ))))))
             (oai--debug "oai-restapi-request-llm-retries2")
@@ -1239,10 +1278,9 @@ TIMER is time to wait for one request."
                                                 ;; else - failed
                                                 (oai--debug "oai-restapi-request-llm failed")
                                                 (run-at-time 0 nil callback nil)
-                                                (with-current-buffer (marker-buffer header-marker)
-                                                  (save-excursion
-                                                    (goto-char header-marker)
-                                                    (oai-block-insert-result "Failed")))
+
+                                                (oai-block-insert-result-message "Failed" header-marker)
+
                                                 (oai-timers--update-global-progress-reporter)
                                                 ))
 
@@ -1296,45 +1334,16 @@ Return t if error happen, otherwise nil"
                            (message (if (and message (not (string-blank-p message)))
                                         message
                                       (json-encode err))))
-                 (if oai-restapi-show-error-in-result
-                     (oai-restapi-insert-result-error (concat (format "%s\n" http-header-first-line)
-                                                              "Error from the service API:\n\t" message) (current-buffer))
-                   ;; else
-                   (oai-restapi--show-error message))
+                 (funcall oai-restapi-show-error-function (concat (format "%s\n" http-header-first-line)
+                                                                  "Error from the service API:\n\t" message)
+                          (oai-timers--get-variable (current-buffer))) ; header-marker
                  )
              (error nil)))
      (when (and http-code (/= http-code 200))
-       (if oai-restapi-show-error-in-result
-           (oai-restapi-insert-result-error (format "HTTP Error from the service: %s %s \n %s" http-code http-data http-header-first-line) (current-buffer))
-           ;; (oai-block-insert-result (format "HTTP Error code from the service API: %s" http-code))
-           (oai-restapi--show-error (number-to-string http-code))
-         )))))
+       (funcall oai-restapi-show-error-function (format "HTTP Error from the service: %s %s \n %s" http-code http-data http-header-first-line)
+                (oai-timers--get-variable (current-buffer))) ; header-marker
+           ))))
 
-(defun oai-restapi-insert-result-error (message url-buffer)
-  (let ((header-marker (oai-timers--get-variable url-buffer)))
-    (with-current-buffer (marker-buffer header-marker)
-      (save-excursion
-        (goto-char header-marker)
-        (oai-block-insert-result message)))))
-
-(defun oai-restapi--show-error (error-message)
-  "Show an error message in a buffer.
-`ERROR-MESSAGE' is the error message to show."
-  (condition-case nil
-      (let ((buf (get-buffer-create "*oai error*")))
-        (with-current-buffer buf
-          (read-only-mode -1)
-          (erase-buffer)
-          (insert "Error from the service API:\n\n")
-          (insert error-message)
-          (display-buffer buf)
-          (goto-char (point-min))
-          (toggle-truncate-lines -1)
-          (read-only-mode 1)
-          ;; close buffer when q is pressed
-          (local-set-key (kbd "q") (lambda () (interactive) (kill-buffer)))
-          t))
-    (error nil)))
 
 (cl-defun oai-restapi--payload (&optional &key service model prompt messages max-tokens temperature top-p frequency-penalty presence-penalty stream)
   "Create the payload for the OpenAI API.
