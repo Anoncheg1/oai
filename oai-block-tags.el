@@ -412,6 +412,33 @@ Use current buffer, current position to output error to result of block if two t
 
 ;; (oai-block-tags--get-replacement-for-org-link  "[[xx]]")
 
+;;; -=-= markdown help functions
+;; (defun oai-block-tags--in-markdown-fences-p ()
+;;   (let* ((element (oai-block-p))
+;;          (limit-begin (org-element-property :contents-begin element))
+;;          (limit-end (org-element-property :contents-end element)))
+;;     (oai-block-markdown-mark-fenced-code-body-get-range limit-begin limit-end)))
+
+(defun oai-block-tags--position-in-code-block-p (str pos)
+  "Return non-nil if POS (an index) is inside a '```' code block in STR."
+  (let ((search-pos 0)
+        (block-boundaries '()))
+    ;; Find all the '```' positions
+    (while (string-match "```" str search-pos)
+      (push (match-beginning 0) block-boundaries)
+      (setq search-pos (match-end 0)))
+    ;; Sort and pair boundaries
+    (setq block-boundaries (sort block-boundaries #'<))
+    (catch 'inside
+      (let ((bounds block-boundaries))
+        (while bounds
+          (let ((start (pop bounds))
+                (end (and bounds (pop bounds))))
+            (when (and end (>= pos start) (< pos end))
+              (throw 'inside t)))))
+      nil)))
+;; (oai-block-tags--position-in-code-block-p "aaa```bbb```ccc" 5)   ;; => t   (inside first block)
+;; (oai-block-tags--position-in-code-block-p "aaa```bbb```ccc" 10)  ;; => nil (outside any block)
 ;;; -=-= Replace
 ;; Supported:
 ;; - @Backtrace
@@ -509,10 +536,6 @@ If REPLACEMENT not provided return found string for regexp."
   "asd path assd"))
  ;; (oai-block-tags--replace-last-regex-smart "asd `[[/tmp][sd]]` assd" (plist-get oai-block-tags--regexes :path) "path")
 
-
-
-
-
 (defun oai-block-tags-replace (string)
   "Replace links in STRING with their targets.
 And return modified string or the same string."
@@ -569,21 +592,24 @@ And return modified string or the same string."
                (setq pos-beg (match-beginning 0))
                (setq pos-end (match-end 0))
                (setq match (match-string 0 new-string))
-               (print (list "aa" (regexp-quote match) new-string))
-               ;; check that there is no clone of this below, hence we replace the last one.
-               (when (not (string-match (regexp-quote match) new-string pos-end))
-                 (setq replacement (oai-block-tags--get-replacement-for-org-link match))
-                 (print (list "replacement" replacement new-string))
-                 (when replacement
-                   (setq new-string (concat (substring new-string 0 pos-beg)
-                                            replacement
-                                            ;; last-group
-                                            (substring new-string pos-end)))
-                   (setq pos-end (+ pos-beg (length replacement)))
-                   (print (list pos-end new-string))
-                   (setq replaced t)
-                   ;; (oai-block-tags--replace-last-regex-smart)
-                   )))
+               (print (list "oai-block-tags-replace 1" (regexp-quote match) new-string))
+               (when (not (oai-block-tags--position-in-code-block-p new-string pos-beg))
+                   (print (list "oai-block-tags-replace 2" (regexp-quote match) new-string))
+
+                 ;; check that there is no clone of this below, hence we replace the last one.
+                 (when (not (string-match (regexp-quote match) new-string pos-end))
+                   (setq replacement (oai-block-tags--get-replacement-for-org-link match))
+                   (print (list "replacement" replacement new-string))
+                   (when replacement
+                     (setq new-string (concat (substring new-string 0 pos-beg)
+                                              replacement
+                                              ;; last-group
+                                              (substring new-string pos-end)))
+                     (setq pos-end (+ pos-beg (length replacement)))
+                     (print (list pos-end new-string))
+                     (setq replaced t)
+                     ;; (oai-block-tags--replace-last-regex-smart)
+                     ))))
              (if replaced
                  new-string))))
 

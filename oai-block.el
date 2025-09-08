@@ -483,42 +483,56 @@ rules in `font-lock-defaults' variable."
 
 ;;; -=-= Select markdown block
 
-;; not used now TODO: make interactive for region mark
+(defun oai-block-markdown-mark-fenced-code-body-get-range (limit-begin limit-end)
+  "Returns (list begin end) of Mardown region, nil otherwise.
+Don't mark header/footer.
+LIMIT-BEGIN and LIMIT-END restrict the search region around point."
+  (let ((point-pos (point))
+        (start nil)
+        (end nil))
+    (save-excursion
+      ;; Find start fence
+      (when (re-search-backward oai-block--markdown-begin-re (or limit-begin (point-min)) t)
+        (setq start (match-end 0))
+        (goto-char point-pos)
+        ;; do we inside owr block?
+        (when (and (re-search-backward oai-block--markdown-end-re  (or limit-begin (point-min)) t)
+                   (> (match-beginning 0) start)
+                   (setq start nil))))
+      ;; Find end fence
+      (goto-char point-pos)
+      (when (and start
+                 (re-search-forward oai-block--markdown-end-re (or limit-end (point-max)) t))
+        (setq end (match-beginning 0))
+        (goto-char point-pos)
+        ;; do we inside owr block?
+        (when (and (re-search-forward oai-block--markdown-begin-re (or limit-end (point-max)) t)
+                   (< (match-end 0) end)
+                   (setq end nil)))))
+    ;; If point is inside fences, mark region
+    (if (and start end (> point-pos start) (< point-pos end))
+      (list start end))))
+
+
 (defun oai-block-markdown-mark-fenced-code-body (&optional limit-begin limit-end)
   "Mark content inside Markdown fenced code block (```), excluding header/footer.
 LIMIT-BEGIN and LIMIT-END restrict the search region around point.
-Returns t if region was marked, nil otherwise."
-    (let ((point-pos (point))
-          (start nil)
-          (end nil))
-      (save-excursion
-        ;; Find start fence
-        (when (re-search-backward oai-block--markdown-begin-re (or limit-begin (point-min)) t)
-          (setq start (match-end 0))
-          (goto-char point-pos)
-          ;; do we inside owr block?
-          (when (and (re-search-backward oai-block--markdown-end-re  (or limit-begin (point-min)) t)
-                     (> (match-beginning 0) start)
-                     (setq start nil))))
-        ;; Find end fence
-        (goto-char point-pos)
-        (when (and start
-                   (re-search-forward oai-block--markdown-end-re (or limit-end (point-max)) t))
-          (setq end (match-beginning 0))
-          (goto-char point-pos)
-          ;; do we inside owr block?
-          (when (and (re-search-forward oai-block--markdown-begin-re (or limit-end (point-max)) t)
-                     (< (match-end 0) end)
-                     (setq end nil)))))
-      ;; If point is inside fences, mark region
-      (when (and start end (> point-pos start) (< point-pos end))
-        (set-mark start)
-        (goto-char end)
-        (forward-line -1)
-        (end-of-line)
-        (activate-mark)
-        t)))
+Returns t if was marked, nil otherwise.
+Used in `oai-block-mark-md-block-body'."
+  ;; fill limit-begin and limit-end - if they was not profiled
+  (if (or (not limit-begin) (not limit-end))
+      (let ((element (oai-block-p)))
+        (setq limit-begin (org-element-property :contents-begin element))
+        (setq limit-end (org-element-property :contents-end element))))
 
+  (let* ((r (oai-block-markdown-mark-fenced-code-body-get-range limit-begin limit-end))
+         (beg (car r))
+         (end (cadr r)))
+    (set-mark beg)
+    (goto-char end)
+    (forward-line -1)
+    (end-of-line)
+    (activate-mark)))
 
 (defun oai-block-mark-src-block-body ()
   "Mark Org blocks content around cursor.
@@ -550,9 +564,9 @@ Mark or select block content around cursor."
          (if-let*((element (oai-block-p))
                   (content-start (org-element-property :contents-begin element))
                   (content-end (org-element-property :contents-end element)))
-             (if
-                 ;; 1 mardown in ai block
-                 (oai-block-markdown-mark-fenced-code-body content-start content-end)
+             ;; 1 mardown in ai block
+             (if (oai-block-markdown-mark-fenced-code-body content-start content-end)
+                 ;; then return t
                  t
                ;; else - 2 ai block only
                (set-mark content-start)
