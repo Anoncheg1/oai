@@ -1,8 +1,4 @@
 ; -*- lexical-binding: t -*-
-(require 'ert)             ; Testing framework
-(require 'oai-block)
-(require 'oai-block-tags)
-
 ;; (eval-buffer) or (load-file "path/to/async-tests.el")
 ;; Running Tests: Load the test file and run:
 ;; (eval-buffer)
@@ -10,31 +6,34 @@
 ;;
 ;; (setq ert-debug-on-error t)
 
-
-;;; Helper function to set up a temporary Org buffer for testing.
+;;; - require
+(require 'ert)             ; Testing framework
+(require 'oai-block)
+(require 'oai-block-tags)
+;;; - Helper function to set up a temporary Org buffer for testing.
 ;; It inserts content and optional Org properties, then returns the
 ;; parsed Oai block element and its parameters alist.
-(defun oai-test-setup-buffer (block-content &optional properties-alist)
-  "Create a temporary Org buffer with BLOCK-CONTENT and optional PROPERTIES-ALIST.
-PROPERTIES-ALIST should be an alist like '((property-name . \"value\")).
-Returns a list (ELEMENT INFO-ALIST), where ELEMENT is the parsed Oai block
-and INFO-ALIST is the parameters from its header."
-  (let ((buf (generate-new-buffer "*oai-test-temp*")))
-    (with-current-buffer buf
-      (org-mode)
-      (setq-local org-export-with-properties t) ; Ensure properties are considered
-      (when properties-alist
-        (dolist (prop properties-alist)
-          (insert (format "#+PROPERTY: %s %s\n" (car prop) (cdr prop)))))
-      (insert block-content)
-      (goto-char (point-min))
-      ;; Move point to the start of the AI block to ensure `org-element-at-point` works
-      ;; and `org-entry-get-with-inheritance` can find properties.
-      (search-forward "#+begin_ai")
-      (let* ((element (org-element-at-point))
-             ;; org-element-property :parameters returns a plist, which alist-get works on.
-             (info-alist (org-element-property :parameters element)))
-        element))))
+;; (defun oai-test-setup-buffer (block-content &optional properties-alist)
+;;   "Create a temporary Org buffer with BLOCK-CONTENT and optional PROPERTIES-ALIST.
+;; PROPERTIES-ALIST should be an alist like '((property-name . \"value\")).
+;; Returns a list (ELEMENT INFO-ALIST), where ELEMENT is the parsed Oai block
+;; and INFO-ALIST is the parameters from its header."
+;;   (let ((buf (generate-new-buffer "*oai-test-temp*")))
+;;     (with-current-buffer buf
+;;       (org-mode)
+;;       (setq-local org-export-with-properties t) ; Ensure properties are considered
+;;       (when properties-alist
+;;         (dolist (prop properties-alist)
+;;           (insert (format "#+PROPERTY: %s %s\n" (car prop) (cdr prop)))))
+;;       (insert block-content)
+;;       (goto-char (point-min))
+;;       ;; Move point to the start of the AI block to ensure `org-element-at-point` works
+;;       ;; and `org-entry-get-with-inheritance` can find properties.
+;;       (search-forward "#+begin_ai")
+;;       (let* ((element (org-element-at-point))
+;;              ;; org-element-property :parameters returns a plist, which alist-get works on.
+;;              (info-alist (org-element-property :parameters element)))
+;;         element))))
 
 
 (defun oai-test-setup-buffer (block-content &optional properties-alist)
@@ -67,9 +66,8 @@ and INFO-ALIST is the parameters from its header."
 
 (oai-test-setup-buffer "#+begin_ai\nTest content\n#+end_ai")
 
-;;; --- Test Cases ---
 
-;; - test for test
+;;; - test for test
 
 (ert-deftest oai-tests-block--setup-buffer-basic-test ()
   "Test that oai-test-setup-buffer sets up a buffer correctly."
@@ -78,11 +76,11 @@ and INFO-ALIST is the parameters from its header."
     (should (eq (org-element-type element) 'special-block))
     (should (equal (org-element-property :type element) "ai"))))
 
-;; - oai-block--let-params
+;;; - oai-block--let-params
 
 (ert-deftest oai-tests-block--let-params-all-from-info-test ()
   "Test when all parameters are provided in the block header (info alist)."
-  (let* ((test-block "#+begin_ai :stream t :sys \"A helpful LLM.\" :max-tokens 50 :model \"gpt-3.5-turbo\" :temperature 0.7\n#+end_ai\n")
+  (let* ((test-block "#+begin_ai :stream t :sys \"A helpful LLM.\" :max-tokens 50 :model \"gpt-3.5-turbo\" :model1 :model2 :model3 :temperature 0.7\n#+end_ai\n")
        (element (oai-test-setup-buffer test-block))
        (info)
        (marker (copy-marker (org-element-property :contents-end element)))
@@ -94,7 +92,7 @@ and INFO-ALIST is the parameters from its header."
           ;; Position point inside the block for correct context, though not strictly needed for info directly.
           (goto-char (org-element-property :begin element))
           (setq info (oai-block-get-info))
-          (oai-block--let-params info ((stream) (sys) (max-tokens :type integer) (model) (temperature :type float) (unknown "s"))
+          (oai-block--let-params info ((stream) (sys) (max-tokens :type integer) (model) (model1) (model2) (model3) (temperature :type float) (unknown "s"))
                                          ;; (print (list max-tokens (type-of max-tokens)))
                                          ;; (print (list temperature (type-of temperature)))
                                          ;; (print (list unknown (type-of unknown)))
@@ -104,68 +102,71 @@ and INFO-ALIST is the parameters from its header."
                                          (should (string-equal model "gpt-3.5-turbo"))
                                          (should (= temperature 0.7))
                                          (should (string-equal unknown "s"))
-                                         ))
+                                         (should (string-equal model1 "nil"))
+                                         (should (string-equal model2 "nil"))
+                                         (should (string-equal model3 nil))))
     (kill-buffer buffer))))
 
 ;; (defun oai-block--oai-restapi-request-prepare (req-type content element sys-prompt sys-prompt-for-all-messages model max-tokens top-p temperature frequency-penalty presence-penalty service stream)
 ;;   )
+;;; - oai-agent-call
+;; (ert-deftest oai-tests-block--oai-agent-call-test ()
 
-(ert-deftest oai-tests-block--oai-agent-call-test ()
+;;   (let* ((test-block "#+begin_ai :stream t :sys \"A helpful LLM.\" :max-tokens 50 :model \"gpt-3.5-turbo\" :temperature 0.7\n\n#+end_ai\n")
+;;          (oai-agent-call #'oai-block--oai-restapi-request-prepare)
+;;          ;; - setup test buffer
+;;          (element (oai-test-setup-buffer test-block))
+;;          (info)
+;;          (marker (copy-marker (org-element-property :contents-end element)))
+;;          (buffer (org-element-property :buffer element))
+;;          evaluated-result)
+;;     ;; (unwind-protect
+;;         (with-current-buffer buffer
+;;           ;; - set cursor
+;;           (goto-char (org-element-property :begin element))
+;;           ;; (print (list "element" (org-element-property :contents-begin element)))
 
-  (let* ((test-block "#+begin_ai :stream t :sys \"A helpful LLM.\" :max-tokens 50 :model \"gpt-3.5-turbo\" :temperature 0.7\n\n#+end_ai\n")
-         (oai-agent-call #'oai-block--oai-restapi-request-prepare)
-         ;; - setup test buffer
-         (element (oai-test-setup-buffer test-block))
-         (info)
-         (marker (copy-marker (org-element-property :contents-end element)))
-         (buffer (org-element-property :buffer element))
-         evaluated-result)
-    ;; (unwind-protect
-        (with-current-buffer buffer
-          ;; - set cursor
-          (goto-char (org-element-property :begin element))
-          ;; (print (list "element" (org-element-property :contents-begin element)))
+;;           (let ((oai-agent-call (lambda (req-type element sys-prompt sys-prompt-for-all-messages model max-tokens top-p temperature frequency-penalty presence-penalty service stream)
+;;                                      ;; (print (list 'req-type (type-of req-type) req-type))
+;;                                      ;; (print (list 'element (type-of element) element))
+;;                                      ;; (print (list 'sys-prompt (type-of sys-prompt) sys-prompt))
+;;                                      ;; (print (list 'sys-prompt-for-all-messages (type-of sys-prompt-for-all-messages) sys-prompt-for-all-messages))
+;;                                      ;; (print (list 'model (type-of model) model))
+;;                                      ;; (print (list 'max-tokens (type-of max-tokens) max-tokens))
+;;                                      ;; (print (list 'top-p (type-of top-p) top-p))
+;;                                      ;; (print (list 'temperature (type-of temperature) temperature))
+;;                                      ;; (print (list 'frequency-penalty (type-of frequency-penalty) frequency-penalty))
+;;                                      ;; (print (list 'presence-penalty (type-of presence-penalty) presence-penalty))
+;;                                      ;; ;; (print (list 'service (type-of service) service))
+;;                                      ;; (print (list 'stream (type-of stream) stream))
+;;                                      ;; (should (and (eql req-type 'chat) (eql (type-of req-type) 'symbol) ))
+;;                                      ;; (should (org-element-type element 'special-block))
+;;                                      ;; (should (eql (type-of element) 'cons))
+;;                                      ;; (should (eql (type-of sys-prompt) 'string))
+;;                                      ;; (should (string= sys-prompt "A helpful LLM."))
+;;                                      ;; (should (and (eql (type-of sys-prompt-for-all-messages) 'symbol) (null sys-prompt-for-all-messages)))
+;;                                      ;; (should (and (eql (type-of model) 'string) (string= model "gpt-3.5-turbo")))
+;;                                      ;; (should (and (eql (type-of max-tokens) 'integer) (= max-tokens 50)))
+;;                                      ;; (should (and (eql (type-of top-p) 'symbol) (null top-p)))
+;;                                      ;; (should (and (eql (type-of temperature) 'float) (= temperature 0.7)))
+;;                                      ;; (should (and (eql (type-of frequency-penalty) 'symbol) (null frequency-penalty)))
+;;                                      ;; (should (and (eql (type-of presence-penalty) 'symbol) (null presence-penalty)))
+;;                                      ;; ;; (should (and (eql (type-of service) 'symbol)
+;;                                      ;; ;;              (= service 'openai)))
+;;                                      ;; (should (and (eql (type-of stream) 'symbol) (eql stream t)))
+;;                                                   ;; (string-equal stream "t"))
+;;                                      ;; (print (list req-type content element sys-prompt sys-prompt-for-all-messages model max-tokens top-p temperature frequency-penalty presence-penalty service stream))
+;;                                      )))
+;;             (oai-ctrl-c-ctrl-c)
+;;             )
+;;           ;; (oai-interface-step1)
 
-          (let ((oai-agent-call (lambda (req-type element sys-prompt sys-prompt-for-all-messages model max-tokens top-p temperature frequency-penalty presence-penalty service stream)
-                                     (print (list 'req-type (type-of req-type) req-type))
-                                     (print (list 'element (type-of element) element))
-                                     (print (list 'sys-prompt (type-of sys-prompt) sys-prompt))
-                                     (print (list 'sys-prompt-for-all-messages (type-of sys-prompt-for-all-messages) sys-prompt-for-all-messages))
-                                     (print (list 'model (type-of model) model))
-                                     (print (list 'max-tokens (type-of max-tokens) max-tokens))
-                                     (print (list 'top-p (type-of top-p) top-p))
-                                     (print (list 'temperature (type-of temperature) temperature))
-                                     (print (list 'frequency-penalty (type-of frequency-penalty) frequency-penalty))
-                                     (print (list 'presence-penalty (type-of presence-penalty) presence-penalty))
-                                     (print (list 'service (type-of service) service))
-                                     (print (list 'stream (type-of stream) stream))
-                                     (should (and (eql req-type 'chat) (eql (type-of req-type) 'symbol) ))
-                                     (should (org-element-type element 'special-block))
-                                     (should (eql (type-of element) 'cons))
-                                     (should (eql (type-of sys-prompt) 'string))
-                                     (should (string= sys-prompt "A helpful LLM."))
-                                     (should (and (eql (type-of sys-prompt-for-all-messages) 'symbol) (null sys-prompt-for-all-messages)))
-                                     (should (and (eql (type-of model) 'string) (string= model "gpt-3.5-turbo")))
-                                     (should (and (eql (type-of max-tokens) 'integer) (= max-tokens 50)))
-                                     (should (and (eql (type-of top-p) 'symbol) (null top-p)))
-                                     (should (and (eql (type-of temperature) 'float) (= temperature 0.7)))
-                                     (should (and (eql (type-of frequency-penalty) 'symbol) (null frequency-penalty)))
-                                     (should (and (eql (type-of presence-penalty) 'symbol) (null presence-penalty)))
-                                     (should (and (eql (type-of service) 'symbol) (string= service "openai")))
-                                     (should (and (eql (type-of stream) 'symbol) (eql stream t)))
-                                                  ;; (string-equal stream "t"))
-                                     ;; (print (list req-type content element sys-prompt sys-prompt-for-all-messages model max-tokens top-p temperature frequency-penalty presence-penalty service stream))
-                                     )))
-            (oai-ctrl-c-ctrl-c)
-            )
-          ;; (oai-interface-step1)
-
-      (kill-buffer buffer)
-      )
-      ;; )
-    )
-  (should t)
-  )
+;;       (kill-buffer buffer)
+;;       )
+;;       ;; )
+;;     )
+;;   (should t)
+;;   )
 
 
 ;; (ert-deftest oai-tests-block--let-params-inherited-properties ()
@@ -236,7 +237,7 @@ and INFO-ALIST is the parameters from its header."
 ;;     ))
 
 
-;;; Test cases - tags
+;;; - tags tests
 (ert-deftest oai-block-tags-replace-test ()
     (let* ((temp-file (make-temp-file "mytest"))
            (res

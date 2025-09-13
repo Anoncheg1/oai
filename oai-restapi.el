@@ -95,6 +95,7 @@
 (require 'oai-block)
 (require 'oai-timers)
 (require 'oai-debug)
+(require 'oai-async1) ; for `oai-async1-plist-get'
 
 (defcustom oai-restapi-jump-to-end-of-block t
   "If non-nil, jump to the end of the block after inserting the completion."
@@ -156,7 +157,7 @@ machine openai--1 password <your token>"
   :type 'string
   :group 'oai)
 
-(defcustom oai-restapi-con-model "gpt-4o-mini"
+(defcustom oai-restapi-con-model '(:openai "gpt-4o-mini")
   "The default model to use.
 See https://platform.openai.com/docs/models for other options.
 If mode is not chat but completion, appropriate model should be set."
@@ -344,24 +345,6 @@ Used for hook only.")
 ;;    (beginning-of-line)))
 
 ;;; -=-= Debugging
-(defun oai-restapi--prettify-json-string (json-string)
-  "Convert a compact JSON string to a prettified JSON string.
-This function uses a temporary buffer to perform the prettification.
-Returns the prettified JSON string.
-Argument JSON-STRING string with json."
-  (condition-case err
-      (let* ((parsed-json (json-read-from-string json-string))
-             ;; 1. First, encode the JSON object. This will be compact with your json-encode.
-             (compact-json (json-encode parsed-json)))
-        (with-temp-buffer
-           (insert compact-json)
-           (json-pretty-print-buffer)
-           (buffer-string)))
-    (error
-        (message "Error formatting JSON: %S" err)
-        (message "Input JSON: %S" json-string))))
-
-
 
 (defun oai-restapi--debug-urllib (source-buf)
   "Copy `url-http' buffer with response to our debugging buffer.
@@ -461,56 +444,112 @@ SERVICE is a string."
     (if spl (car spl)
       service)))
 
-(defmacro oai-restapi--get-value-or-string (var key)
-  "Retrieve value from VAR using KEY if VAR is a plist, or return VAR if it's a string.
-VAR is the variable name to evaluate.
-KEY is a string (without :) or keyword (leading with :) used as a key if
-VAR is a plist."
-  `(cond ((plistp ,var)
-          (plist-get ,var (if (stringp ,key)
-                              (intern (concat ":" ,key))
-                            ,key)))
-          ((stringp ,var)
-           ,var)
-          (t nil)))
+;; (defmacro oai-restapi--get-value-or-string (var key) ; old
+;;   "Retrieve value from VAR using KEY if VAR is a plist, or return VAR if it's a string.
+;; VAR is the variable name to evaluate.
+;; KEY is a string (without :) or keyword (leading with :) used as a key if
+;; VAR is a plist."
+;;   `(cond ((plistp ,var)
+;;           (plist-get ,var (if (stringp ,key)
+;;                               (intern (concat ":" ,key))
+;;                             ,key)))
+;;           ((stringp ,var)
+;;            ,var)
+;;           (t nil)))
 
-;; (oai-restapi--get-value-or-string oai-restapi-con-endpoints "openai")
-;; (oai-restapi--get-value-or-string oai-restapi-con-endpoints :openai)
+;; ;; ;; (oai-restapi--get-value-or-string oai-restapi-con-endpoints "openai")
+;; ;; ;; (oai-restapi--get-value-or-string oai-restapi-con-endpoints :openai)
+;; ;; (oai-restapi--get-value-or-string oai-restapi-con-token "local")
+;; ;; (oai-restapi--get-value-or-string oai-restapi-con-token "github")
+
+(defun oai-restapi--get-values (plist key)
+  "KEY can be a keyword or string.
+Return:
+- list with its value (even if nil) - If KEY exists in PLIST.
+- '(nil) - If KEY exists with nil or without value.
+- nil - If KEY does NOT exist."
+  (if (stringp plist)
+      (list plist)
+    ;; else
+    (let* ((search-key (if (stringp key) (intern (concat ":" key)) key))
+           (marker (make-symbol "oai-not-found"))
+           (val (oai-async1-plist-get plist search-key marker)))
+      (cond ((eq val marker)
+             '())
+          ((and val (listp val))
+           val)
+          (val
+           (list val))
+          (t
+           (list nil))))))
+
+(cl-assert (equal (oai-async1-plist-get '(:zaza :foo 1 :bar nil) :zaza) nil))
+
+(cl-assert (equal (oai-restapi--get-values '(:foo 1 :bar nil) :foo)	'(1)))
+(cl-assert (equal (oai-restapi--get-values '(:foo 1 :bar nil) :bar)	'(nil))) ; value is nil
+(cl-assert (equal (oai-restapi--get-values '(:foo 1 :bar nil) :baz)	nil)) ; not exist
+(cl-assert (equal (oai-restapi--get-values '(:foo 1 :bar nil) :zaza)	nil)) ; not exist
+(cl-assert (equal (oai-restapi--get-values '(:only) :only)		'(nil)))  ; no value
+(cl-assert (equal (oai-restapi--get-values "something" "vvv")		'("something")))
+(cl-assert (equal (oai-restapi--get-values '(:foo (1 2) :bar nil) :foo)	'(1 2))) ; list of values
+(cl-assert (equal (oai-restapi--get-values nil "vvv")		nil))
+(cl-assert (equal (oai-restapi--get-values '(:zaza :foo 1 :bar nil) :zaza)	'(nil))) ; value is null
+;; (oai-restapi--get-values oai-restapi-con-model "github")
+;; (oai-restapi--get-values oai-restapi-con-model "github")
+;; (oai-restapi--get-values oai-restapi-con-token "github")
+
+(defun oai-restapi--get-values-enhanced (keeper key)
+  "key may have postfix --N.
+Return nil if key not found, else list with value if found."
+  (if (and (stringp keeper) (string-empty-p keeper))
+      nil
+    ;; else
+    (let* ((spl (if (stringp key) (oai-restapi--split-dash-number key))) ; nil or ("github" . 1)
+           (key-number (if spl (cdr spl)))
+           (key (if spl (car spl) key))
+           ;; find key in plist
+           (values (oai-restapi--get-values keeper key))) ; list or one string or ( nil not exist) or list with nil if exist
+      (if (and spl (listp values) key-number)
+          (if (>= key-number (length values))
+              nil
+            ;; else
+            (list (nth key-number values))) ; list with one value
+        ;; else
+        values))))
+
+(cl-assert (equal
+            (let ((oai-restapi-con-token '(:local1
+                                           :github ("token1" "token2" "token3")
+                                           :some "vv"
+                                           :local2 nil)))
+              (oai-restapi--get-values-enhanced oai-restapi-con-token "github--3")) nil))
+
 
 (defun oai-restapi--get-token (service)
-  "Try to get the openai token.
-Either from `oai-restapi-con-token' or from auth-source.
-Optional argument SERVICE of token.
-Never return nil, signal error if token not found"
-  (cond
-   ;; one token
-   ((and (stringp oai-restapi-con-token)
-         (not (string-empty-p oai-restapi-con-token)))
-    oai-restapi-con-token)
-   ;; several tokens
-   ((plistp oai-restapi-con-token)
-    ;; if service is "openai--N"
-    (let* ((spl (if (stringp service) (oai-restapi--split-dash-number service)))
-           (service-number (if spl (cdr spl)))
-           (service (if spl (car spl) service))
-           tokens)
-      ;; find service in plist
-      (setq tokens (oai-restapi--get-value-or-string oai-restapi-con-token service))
-      (cond ((stringp tokens) tokens)
-            ;; servie “foo--0” we get first from tokens
-            ((and spl (listp tokens) service-number)
-             (nth service-number tokens))
-            ;; service have “foo”, we just get first from tokens.
-            ((and tokens (listp tokens) (not spl) (stringp service))
-             (car tokens))
-            (t
-             (error "Token not found in defined plist `oai-restapi-con-token'.")))))
-   ((and
-     (or (not oai-restapi-con-token) (string-empty-p oai-restapi-con-token))
-     (oai-restapi--get-token-auth-source service)))
-   (t
-    (error "Please set `oai-restapi-con-token' to your OpenAI API token or setup auth-source (see oai readme)"))))
+  "Get token or errored.
+Get token from `oai-restapi-con-token' or from auth-source.
+Return nil if SERVICE exist without token, signal error if SERVICE
+not found in tokens."
+  ;; (print (list service (oai-restapi--get-values-enhanced oai-restapi-con-token service)))
+  (let ((token (oai-restapi--get-values-enhanced oai-restapi-con-token service)))
+    (if token
+        (prog1 (setq token (car token)) ; nil or value
+          (when (and token (not (stringp token))) ; check that token is string, not number
+            (user-error "Token in `oai-restapi-con-token' is not string but something other, please check.")))
+      ;; else - nil not found or `oai-restapi-con-token' is not defined
+      (prog1 (setq token (oai-restapi--get-token-auth-source service))
+        (if (not token)
+            ;; else - not found in auth-sources and not found or `oai-restapi-con-token' is not defined
+            (if (plistp oai-restapi-con-token)
+                (user-error "Token not found in defined plist `oai-restapi-con-token' and in auth sources.")
+              ;; else no `oai-restapi-con-token'
+              (user-error "Please set `oai-restapi-con-token' to your OpenAI API token or setup auth-source (see oai readme).")))))))
 
+
+;; (oai-restapi--get-token "github") => first token from list
+;; (oai-restapi--get-token "github--0") => first token from list
+;; (oai-restapi--get-token "local") => nil, exist
+;; (oai-restapi--get-token "local") => error!
 
 ;; (defun org-ai--openai-get-chat-model (service)
 ;;   "Allow to set default model as one string or per service."
@@ -548,16 +587,17 @@ whether messages are provided."
   (let* ((service (or (if service
                           (oai-restapi--openai-service-clear-dashes service))
                       (oai-restapi-con-service)))
-         (endpoint (oai-restapi--get-value-or-string oai-restapi-con-endpoints service)))
+         (endpoint (car (oai-restapi--get-values oai-restapi-con-endpoints service))))
     (cond
      (endpoint endpoint)
      ((eq service 'azure-openai)
       (format "%s/openai/deployments/%s%s/completions?api-version=%s"
               oai-restapi-azure-openai-api-base oai-restapi-azure-openai-deployment
               (if messages "/chat" "") oai-restapi-azure-openai-api-version))
+     ((messages)
+      (car (oai-restapi--get-values oai-restapi-con-endpoints :openai)))
      (t
-      (if messages (oai-restapi--get-value-or-string oai-restapi-con-endpoints :openai)
-        (oai-restapi--get-value-or-string oai-restapi-con-endpoints :openai-completion))))))
+      (car (oai-restapi--get-values oai-restapi-con-endpoints :openai-completion))))))
 
 (defun oai-restapi--get-headers (service)
   "Determine the correct headers based on the service."
@@ -566,6 +606,7 @@ whether messages are provided."
               oai-restapi-con-service))
         (token (oai-restapi--get-token service)))
     `(("Content-Type" . "application/json")
+      ;; authentication
       ,@(cond
         ((eq serv 'azure-openai)
          `(("api-key" . ,token)))
@@ -575,9 +616,10 @@ whether messages are provided."
         ((eq serv 'google)
          `(("Accept-Encoding" . "identity")
            ("Authorization" . ,(encode-coding-string (string-join `("Bearer" ,token) " ") 'utf-8))))
-        (t
+        (token
          `(("Authorization" . ,(encode-coding-string (string-join `("Bearer" ,token) " ") 'utf-8))))))))
 
+;; (oai-restapi--get-headers "local")
 
 (defun oai-restapi--get-lenght-recommendation (max-tokens)
   "Recomendation to limit yourself.
@@ -659,7 +701,7 @@ probability distribution.
      #'oai-restapi--interrupt-url-request
      )))
 
-;;; -=-= Main parts
+;;; -=-= Main insert, read
 
 ;; Together.xyz 2025
 ;; '(id "nz7KyaB-3NKUce-9539d1912ce8b148" object "chat.completion" created 1750575101 model "meta-llama/Llama-3.3-70B-Instruct-Turbo-Free" prompt []
@@ -1048,22 +1090,26 @@ For not stream url return event and hook after-change-functions
   (let ((url-request-extra-headers (oai-restapi--get-headers service))
         (url-request-method "POST")
         (endpoint (oai-restapi--get-endpoint messages service))
-        (url-request-data (oai-restapi--payload :prompt prompt
-					   :messages messages
-					   :model model
-					   :max-tokens max-tokens
-					   :temperature temperature
-					   :top-p top-p
-					   :frequency-penalty frequency-penalty
-					   :presence-penalty presence-penalty
-					   :service service
-					   :stream stream)))
+        (url-request-data
+         (encode-coding-string (json-encode
+                                (oai-restapi--payload :prompt prompt
+					              :messages messages
+					              :model model
+					              :max-tokens max-tokens
+					              :temperature temperature
+					              :top-p top-p
+					              :frequency-penalty frequency-penalty
+					              :presence-penalty presence-penalty
+					              :service service
+					              :stream stream))
+                               'utf-8)))
     ;; - regex check
-    (oai-restapi--check-model model endpoint) ; not empty and if "api.openai.com" or "openai.azure.com"
+    (if model
+        (oai-restapi--check-model model endpoint)) ; not empty and if "api.openai.com" or "openai.azure.com"
     (oai--debug "oai-restapi-request endpoint:" service (type-of service))
     (oai--debug "oai-restapi-request endpoint:" endpoint (type-of endpoint))
     (oai--debug "oai-restapi-request headers:" url-request-extra-headers)
-    (oai--debug "oai-restapi-request request-data:" (oai-restapi--prettify-json-string url-request-data))
+    (oai--debug "oai-restapi-request request-data:" (oai-debug--prettify-json-string url-request-data))
 
 
     (oai--debug "Main request before, that return a \"urllib buffer\".")
@@ -1116,21 +1162,24 @@ Call callback with nil or result of `oai-restapi--normalize-response' of respons
   (let ((url-request-extra-headers (oai-restapi--get-headers service))
         (url-request-method "POST")
         (endpoint (oai-restapi--get-endpoint messages service))
-        (url-request-data (oai-restapi--payload :prompt prompt
-					   :messages messages
-					   :model model
-					   :max-tokens max-tokens
-					   :temperature temperature
-					   :top-p top-p
-					   :frequency-penalty frequency-penalty
-					   :presence-penalty presence-penalty
-					   :service service
-					   :stream nil)))
+        (url-request-data
+         (encode-coding-string (json-encode
+                                (oai-restapi--payload :prompt prompt
+					              :messages messages
+					              :model model
+					              :max-tokens max-tokens
+					              :temperature temperature
+					              :top-p top-p
+					              :frequency-penalty frequency-penalty
+					              :presence-penalty presence-penalty
+					              :service service
+					              :stream nil))
+                               'utf-8)))
     (oai--debug "oai-restapi-request-llm prompt: %s" prompt)
     (oai--debug "oai-restapi-request-llm messages: %s" messages)
     ;; (oai--debug "oai-restapi-request-llm messages2: %s" (oai-restapi--modify-last-user-content messages #'oai-block-tags-replace))
     (oai--debug "oai-restapi-request-llm endpoint: %s %s" endpoint (type-of endpoint))
-    (oai--debug "oai-restapi-request-llm request-data:" (oai-restapi--prettify-json-string url-request-data))
+    (oai--debug "oai-restapi-request-llm request-data:" (oai-debug--prettify-json-string url-request-data))
 
     (let* ((url-request-buffer
            (url-retrieve ; <- - - - - - - - -  MAIN
@@ -1372,23 +1421,29 @@ is the presence penalty.
         (setq max-tokens nil)
         (setq max-completion-tokens (or max-tokens 128000))))
 
-   (let* ((input (if messages `(messages . ,messages) `(prompt . ,prompt)))
-          ;; TODO yet unsupported properties: n, stop, logit_bias, user
-          (data (map-filter (lambda (x _) x)
-                            `(,input
-                              (model . ,model)
-                              ,@(when stream                `((stream . ,stream)))
-                              ,@(when max-tokens            `((max_tokens . ,max-tokens)))
-                              ,@(when max-completion-tokens `((max-completion-tokens . ,max-completion-tokens)))
-                              ,@(when temperature           `((temperature . ,temperature)))
-                              ,@(when top-p                 `((top_p . ,top-p)))
-                              ,@(when frequency-penalty     `((frequency_penalty . ,frequency-penalty)))
-                              ,@(when presence-penalty      `((presence_penalty . ,presence-penalty)))))))
+    (print (list "stream-payload" stream))
 
-     (when extra-system-prompt
-       (setq data (append data `((system . ,extra-system-prompt)))))
+    (let* ((input (if messages `(messages . ,messages) `(prompt . ,prompt)))
+           ;; TODO yet unsupported properties: n, stop, logit_bias, user
+           (data (map-filter (lambda (x _) x)
+                             `(,input
+                               ,@(when model                 `((model . ,model)))
+                               ;; ,@(when stream                `((stream . t)))
+                               ;; ,@(when (not stream)          `((stream . nil)))
+                               (stream . ,stream)
+                               ,@(when max-tokens            `((max_tokens . ,max-tokens)))
+                               ,@(when max-completion-tokens `((max-completion-tokens . ,max-completion-tokens)))
+                               ,@(when temperature           `((temperature . ,temperature)))
+                               ,@(when top-p                 `((top_p . ,top-p)))
+                               ,@(when frequency-penalty     `((frequency_penalty . ,frequency-penalty)))
+                               ,@(when presence-penalty      `((presence_penalty . ,presence-penalty)))))))
+      (print data)
 
-     (encode-coding-string (json-encode data) 'utf-8))))
+      (when extra-system-prompt
+        (setq data (append data `((system . ,extra-system-prompt)))))
+      data)))
+
+     ;; (encode-coding-string (json-encode data) 'utf-8))))
 
 (defun oai-restapi--url-request-on-change-function (_beg _end _len)
   "First function that read url-request buffer and extracts JSON stream responses.
@@ -1878,14 +1933,14 @@ inside the assembled prompt string."
 
 ;;; -=-= Others
 
-(defun oai-restapi--stream-supported (service model)
-  "Check if the stream is supported by the service and model.
-`SERVICE' is the service to use. `MODEL' is the model to use.
-Used in oai.el"
-  ;; stream not supported by openai o1 models
-  (not (and (or (eq service 'openai) (eq service 'azure-openai))
-            (or
-             (string-prefix-p "o1-pro" model)))))
+;; (defun oai-restapi--stream-supported (service model)
+;;   "Check if the stream is supported by the service and model.
+;; `SERVICE' is the service to use. `MODEL' is the model to use.
+;; Used in oai.el"
+;;   ;; stream not supported by openai o1 models
+;;   (not (and (or (eq service 'openai) (eq service 'azure-openai))
+;;             (or
+;;              (string-prefix-p "o1-pro" model)))))
 
 ;; not used
 (defun oai-restapi-switch-chat-model ()

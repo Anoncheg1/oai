@@ -84,7 +84,10 @@ Otherwise format every to string and concatenate."
         (with-current-buffer bu
           ;; - move point to  to bottom
           (if buf-exist ; was not created
-              (goto-char (point-max)))
+              (goto-char (point-max))
+            ;; else buffer just created
+            (local-set-key "q" #'quit-window)
+            )
           ;; ;; - scroll debug buffer down
           (if bu-window
               (with-selected-window (get-buffer-window bu)
@@ -119,6 +122,25 @@ Otherwise format every to string and concatenate."
               (insert result-string))
 
             ))))))
+
+
+(defun oai-debug--prettify-json-string (json-string)
+  "Convert a compact JSON string to a prettified JSON string.
+This function uses a temporary buffer to perform the prettification.
+Returns the prettified JSON string.
+Argument JSON-STRING string with json."
+  (condition-case err
+      (let* ((parsed-json (json-read-from-string json-string))
+             ;; 1. First, encode the JSON object. This will be compact with your json-encode.
+             (compact-json (json-encode parsed-json)))
+        (with-temp-buffer
+           (insert compact-json)
+           (json-pretty-print-buffer)
+           (buffer-string)))
+    (error
+        (message "Error formatting JSON: %S" err)
+        (message "Input JSON: %S" json-string))))
+
 
 ;; (oai--debug "test %s" 2)
 ;; (oai--debug "test" 2 3 "sd")

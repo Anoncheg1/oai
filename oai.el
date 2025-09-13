@@ -117,13 +117,9 @@ TODO: pass callback for writing."
     (oai-call-block) ; here
     t))
 
+(oai-restapi--get-values oai-restapi-con-model "openai")
 
-(defun oai-call-block ()
-  "Read Org parameters and send the text content to next step."
-  (interactive)
-  ;; -- remove result block
-  (oai-block-remove-result)
-
+(defun oai-parse-org-header ()
   ;; -- Org "Pre-parsing"
   (let* ((element (oai-block-p)) ; oai-block.el
          (info (oai-block-get-info element)) ; ((:max-tokens . 150) (:service . "together") (:model . "xxx")) ; oai-block.el
@@ -139,44 +135,102 @@ TODO: pass callback for writing."
     (oai-block--let-params info
                            ;; format: (variable optional-default type)
                            ((service oai-restapi-con-service string) ; oai-restapi.el
-                            (model (if (oai-restapi--get-value-or-string oai-restapi-con-model service)
-                                       ;; (oai-restapi--get-value-or-string org-ai-creds-completion-model service)
-                                       :type string)) ; oai-restapi.el
+                            (model (let ((m (oai-restapi--get-values oai-restapi-con-model service)))
+                                       (if (not m)
+                                         (user-error "Model not specified."))
+                                       ;; else
+                                       (car m))
+                                   :type string) ; oai-restapi.el
                             (max-tokens oai-restapi-default-max-tokens :type number)
                             (top-p nil :type number)
                             (temperature nil :type number)
                             (frequency-penalty nil :type number)
                             (presence-penalty nil :type number)
-                            (stream "t" :type string)
+                            (stream t :type bool)
                             )
+                           (print (list "model" model))
+                           (print (list "stream1" stream))
                            (print (list "service" service (type-of service)))
                            ;; - body with some Org "Post-parsing":
                            ;; (print (list "SERVICE" service (stringp service) (org-ai--read-service-name service)))
                            (let (
                                  (service (or service
                                               oai-restapi-con-service)) ; default in oai-restapi.el
-                                 (stream (if (and stream (string-equal-ignore-case stream "nil"))
-                                             nil
-                                           ;; else
-                                           (oai-restapi--stream-supported service model))))
+                                 ;; (stream (if (not (oai-restapi--stream-supported service model))
+                                 ;;             nil
+                                 ;;           ;; else
+                                 ;;           stream
+                                 ;;           ))
+                                 (model (if (and (stringp model)
+                                                 (string-equal model "nil"))
+                                            nil
+                                          ;; else
+                                          model
+                                          )))
+                             (print (list "stream2" stream))
                              ;; - main call
                              (condition-case err ; for `oai-block-tags-replace'
-                                 (funcall oai-agent-call-function req-type element sys-prompt sys-prompt-for-all-messages ; message
+                                 ;; return
+                                 (list req-type element sys-prompt sys-prompt-for-all-messages ; message
                                           model max-tokens top-p temperature frequency-penalty presence-penalty service stream ; model params
                                           )
                                (user-error
                                 (funcall oai-restapi-show-error-function (error-message-string err)
                                          (oai-block-get-header-marker element))))))))
 
+;; (oai-restapi--get-values oai-restapi-con-model "local")
+;; (let ((m nil))
+;;   (unless m
+;;                                          (user-error "Model not specified.")))
+
+(defun oai-call-block ()
+  "Read Org parameters and send the text content to next step."
+  (interactive)
+  ;; -- remove result block
+  (oai-block-remove-result)
+
+  (apply oai-agent-call-function (oai-parse-org-header)))
+
 ;;; -=-= key M-x: oai-expand-block
+(defun oai-expand-block-deep ()
+  (print "oai-expand-block-deep")
+  (seq-let (req-type element sys-prompt sys-prompt-for-all-messages model max-tokens top-p temperature frequency-penalty presence-penalty service stream) (oai-parse-org-header)
+    (let* (
+         (content (string-trim (oai-block-get-content element))) ; string - is block content
+         (messages (unless (eql req-type 'completion)
+                     ;; - split content to messages
+                     (oai-restapi--collect-chat-messages content
+                                                           sys-prompt
+                                                           sys-prompt-for-all-messages
+                                                           (if oai-restapi-add-max-tokens-recommendation
+                                                               (oai-restapi--get-lenght-recommendation max-tokens)
+                                                             )))) ; oai-block.el
+         )
+      (list
+       (oai-restapi--get-endpoint messages service)
+       (oai-restapi--get-headers service)
+       (oai-restapi--payload :prompt content
+			     :messages messages
+			     :model model
+			     :max-tokens max-tokens
+			     :temperature temperature
+			     :top-p top-p
+			     :frequency-penalty frequency-penalty
+			     :presence-penalty presence-penalty
+			     :service service
+			     :stream stream)))
+
+    ;; (print (list req-type element sys-prompt sys-prompt-for-all-messages model max-tokens top-p temperature frequency-penalty presence-penalty service stream))
+  ))
+
 ;;;###autoload
-(defun oai-expand-block ()
+(defun oai-expand-block (arg)
   "Show a temp buffer with what the ai block expands to.
 If there is ai block at current position in current buffer.
 This is what will be sent to the api.  ELEMENT is the ai block.
 Like `org-babel-expand-src-block'.
 Set `help-window-select' variable to get focus."
-  (interactive)
+  (interactive "P")
   (let  ((element (oai-block-p))) ; oai-block.el
     (condition-case err
         (let*( (expanded (string-trim
@@ -184,11 +238,19 @@ Set `help-window-select' variable to get focus."
                           ))
                (expanded (oai-restapi--collect-chat-messages expanded))
                (expanded (oai-restapi--modify-last-user-content expanded #'oai-block-tags-replace))
-               (expanded (oai-restapi--stringify-chat-messages expanded)))
+               (expanded (if arg
+                             (apply #'mapconcat #'identity (mapcar (lambda (x) (string-replace "\n" "\\n" (prin1-to-string x)))  expanded) '("\n"))
+                           (oai-restapi--stringify-chat-messages expanded)))
+               (headers (if arg
+                                (oai-expand-block-deep)))
+               )
           (if (called-interactively-p 'any)
               (let ((buf (get-buffer-create "*OAi Preview*")))
                 (with-help-window buf (with-current-buffer buf
-                                        (insert expanded)))
+                                        (if arg
+                                            (insert (pp-to-string headers))
+                                           (insert expanded))
+                                        ))
                 (switch-to-buffer buf))
             expanded))
       (user-error

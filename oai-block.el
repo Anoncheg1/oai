@@ -158,10 +158,54 @@ If exist return nil or string, if not exist  return `default'."
       ;; else - nil or string
       sys-raw)))
 
+;; (defmacro oai-block--let-params (info definitions &rest body)
+;;   "A specialized `let*' macro for Oai parameters.
+;; DEFINITIONS is a list of (VARIABLE &optional DEFAULT-FORM &key TYPE).
+;; TYPE can be 'number, 'bool, 'string, or 'identity (no conversion).
+;; Return one of:
+;; - nil symbol, if key/property not specified or explicit nil (after type processing).
+;; - Processed value of parameter (e.g., t/nil for bool).
+;; Parameters are sourced from:
+;; 1. From Oai block header `info' alist. (e.g., :model \"gpt-4\")
+;; 2. Org inherited property. (e.g., #+PROPERTY: model gpt-4)
+;; 3. DEFAULT-FORM."
+;;   `(let* ,(cl-loop for def-item in definitions
+;;                    collect
+;;                    (let* ((sym (car def-item))
+;;                           (default-form (cadr def-item))
+;;                           (type (cadr (member :type def-item)))
+;;                           (key (intern (concat ":" (symbol-name sym))))
+;;                           (prop-name (symbol-name sym)))
+;;                      `(,sym (let ((val (or (let* ((v1 (assoc ,key info))
+;;                                                   (v2 (cdr v1)))
+;;                                              (if (and v1 (not v2))
+;;                                                  "nil"
+;;                                                v2))
+;;                                            (org-entry-get-with-inheritance ,prop-name)
+;;                                            ,@(when default-form `(,default-form)))))
+
+;;                               (cond ((eql type 'number)
+;;                                      (cond ((null val) nil)
+;;                                            ((and (stringp val) (string= val "nil")) nil)
+;;                                            ((stringp val) (string-to-number val))
+;;                                            ((numberp val) val) (t val)))
+;;                                     ((eql type 'bool)
+;;                                      (cond ((null val) nil) ((eq val t) t) ((stringp val) (if (member (downcase val) '("t" "true" "yes" "on" "1")) t nil))
+;;                                            (t nil)))
+;;                                     ((eql type 'string)
+;;                                      (cond ((null val) nil) ((stringp val) val)
+;;                                            (t (prin1-to-string val))))
+;;                                     ((eql type 'identity) val) (t val))
+;;                               ))))  ; Default no-op
+;;      ,@body))
+
 (defmacro oai-block--let-params (info definitions &rest body)
   "A specialized `let*' macro for Oai parameters.
 DEFINITIONS is a list of (VARIABLE &optional DEFAULT-FORM &key TYPE).
-TYPE can be 'number or 'identity.
+TYPE can be 'number, 'bool, 'string, or 'identity (no conversion).
+Return one of:
+- nil symbol, if key/property not specified or explicit nil (after type processing).
+- Processed value of parameter (e.g., t/nil for bool).
 Parameters are sourced from:
 1. From Oai block header `info' alist. (e.g., :model \"gpt-4\")
 2. Org inherited property. (e.g., #+PROPERTY: model gpt-4)
@@ -170,19 +214,109 @@ Parameters are sourced from:
                    collect
                    (let* ((sym (car def-item))
                           (default-form (cadr def-item))
-                          ;; Look for the :type keyword in the rest of the list
-                          (type (cadr (member :type def-item))))
-                     `(,sym (or (alist-get ,(intern (format ":%s" (symbol-name sym))) info)
-                                ,(cond
-                                  ((string= (symbol-name sym) "model") ; Special: no conversion for model
-                                   `(org-entry-get-with-inheritance ,(symbol-name sym)))
-                                  ((eq type 'number)
-                                   `(when-let ((prop (org-entry-get-with-inheritance ,(symbol-name sym))))
-                                      (if (stringp prop) (string-to-number prop) prop)))
-                                  (t ; Default: identity conversion
-                                   `(org-entry-get-with-inheritance ,(symbol-name sym))))
-                                ,@(when default-form `(,default-form))))))
+                          (type (cadr (member :type def-item)))
+                          (key (intern (concat ":" (symbol-name sym))))
+                          (prop-name (symbol-name sym))
+                          (postprocessor (cl-case type
+                                       (number `(cond ((null val) nil)
+                                                      ((and (stringp val) (string= val "nil")) nil)
+                                                      ((stringp val) (string-to-number val))
+                                                      ((numberp val) val)
+                                                      (t val)))
+                                       (bool `(cond ((null val) nil)
+                                                    ((eq val t) t)
+                                                    ((stringp val) (if (member (downcase val) '("t" "true" "yes" "on" "1")) t nil))
+                                                    (t nil)))
+                                       (string `(cond ((null val) nil)
+                                                      ((and (not (stringp val)) (equal val t)) ; empty
+                                                       nil)
+                                                      ((stringp val)
+                                                       (if (string-equal-ignore-case val "nil")
+                                                           nil
+                                                         ;; else
+                                                         val))
+                                                      (t (prin1-to-string val))))
+                                       (identity `val)
+                                       (t `val))))
+                     `(,sym (let ((val (or (let* ((v1 (assoc ,key info))
+                                                  (v2 (cdr v1)))
+                                             (if (and v1 (not v2)) ; exist empty
+                                                 t
+                                               v2))
+                                           (org-entry-get-with-inheritance ,prop-name)
+                                           ,@(when default-form `(,default-form)))))
+                              ,postprocessor))))
      ,@body))
+
+
+
+;; info cases:
+;; - string: '((:model . "openai/gpt-4.1"))
+;; - int: '((:max-tokens . 3000))
+;; - 'nil: '((:model))
+;; - only key: '((:model))
+;; - nil: '((:model . "nil"))
+;; get value from info:
+;; - (alist-get :model '((:model . "nil"))) => "nil"
+;; - (alist-get :model '((:model))) => nil
+;; - (alist-get :model '(())) => nil
+;; - (assoc :model '(())) => nil => (cdr nil) => nil
+;; - (assoc :model '((:model))) => (:model) => (cdr '(:model)) => nil
+;; - (assoc :model '((:model . "nil"))) => (:model . "nil") => (:model . "nil") => "nil"
+;; (concat \":\" (symbol-name sym))
+;; Solution:
+;; (let* ((v1 (assoc :model '((:model))))
+;;           (v2 (cdr v1)))
+;;     (if (and v1 (not v2))
+;;         "nil"
+;;       v2))
+
+;; Test for `oai-block--let-params':
+(cl-letf (((symbol-function 'org-entry-get-with-inheritance)
+           (lambda (_) nil)))
+  (let ((info '((:model))))
+    (oai-block--let-params info
+                           ((model nil :type string))
+                           (print (list "model" model)))))
+
+(cl-letf (((symbol-function 'org-entry-get-with-inheritance)
+           (lambda (_) nil)))
+  (let ((info '((:model)
+                (:model1 . "nil")
+                (:stream1 . "nil")
+                (:stream2 . t)
+                ;; (:stream3)
+                (:stream4)
+                )))
+    (oai-block--let-params info
+                           ((model nil :type string)
+                            (model1 nil :type string)
+                            (model2 nil :type string)
+                            (stream nil :type bool)
+                            (stream1 nil :type bool)
+                            (stream2 nil :type bool)
+                            (stream3 t :type bool)
+                            (stream4 nil :type bool)
+                            )
+                           ;; (print (list "stream4" stream4)))))
+                           ;; (print (list "model1" model1)) => ("nil" "nil")
+                           (if (not (string-equal model "nil"))
+                               (error "oai-block--let-params assert1"))
+                           (if (not (equal model1 nil))
+                               (error "oai-block--let-params assert2"))
+                           (if (not (equal model2 nil))
+                               (error "oai-block--let-params assert3"))
+                           (if (not (equal stream nil))
+                               (error "oai-block--let-params assert4"))
+                           (if (not (string-equal stream1 nil))
+                               (error "oai-block--let-params assert5"))
+                           (if (not (equal stream2 t))
+                               (error "oai-block--let-params assert6"))
+                           (if (not (equal stream3 t))
+                               (error "oai-block--let-params assert7"))
+                           (if (not (equal stream4 t))
+                               (error "oai-block--let-params assert8"))
+)))
 
 
 (defvar oai-block--roles-regex "\\[SYS\\]:\\|\\[ME\\]:\\|\\[ME:\\]\\|\\[AI\\]:\\|\\[AI_REASON\\]:")
@@ -249,13 +383,13 @@ A negative argument ARG = -N means move backward."
   (when-let* ((regions (oai-block--chat-role-regions))
               (start (cl-find-if (lambda (x) (>= (point) x)) (reverse regions)))
               (end (cl-find-if (lambda (x) (< (point) x)) regions)))
-    (oai--debug "oai-forward-section1 %s %s" start end)
+    ;; (oai--debug "oai-forward-section1 %s %s" start end)
     (or arg (setq arg 1))
     (if (> arg 0)
         (goto-char end)
       ;; else - backward
       (let ((prev (cl-find-if (lambda (x) (>= (1- start) x)) (reverse regions))))
-        (oai--debug "oai-forward-section2 %s %s %s" (>= (point) start) prev start)
+        ;; (oai--debug "oai-forward-section2 %s %s %s" (>= (point) start) prev start)
         (when  prev ;; (>= (point) start))
           (if (and (> (point) start) ; if at the middle of first section
                    (not prev))

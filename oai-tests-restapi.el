@@ -33,6 +33,9 @@ Stop it with `oai-restapi-stop-url-request'.
   (let ((oai-restapi-con-token '(:openai "test-token-openai" :anthropic "test-token-anthropic")))
     (should (equal (oai-restapi--get-token :openai) "test-token-openai"))))
 
+;; (let ((oai-restapi-con-token '(:openai "test-token-openai" :anthropic "test-token-anthropic")))
+;;     (oai-restapi--get-token :openai))
+
 (ert-deftest oai-restapi--get-token-plist-invalid-test ()
   "Test when oai-restapi-con-token is a plist without the service token."
   (let ((oai-restapi-con-token '(:anthropic "test-token-anthropic")))
@@ -40,31 +43,58 @@ Stop it with `oai-restapi-stop-url-request'.
                 (should-error (oai-restapi--get-token :openai) :type 'error))))
       (should (eql 0 (string-match "Token not found" err))))))
 
+;; (let ((oai-restapi-con-token '(:anthropic "test-token-anthropic")))
+;;   (oai-restapi--get-token :openai))
+
+;; (ert-deftest oai-restapi--get-token-auth-source-test ()
+;;   "Test when token is retrieved from auth-source."
+;;   (let ((oai-restapi-con-token "")
+;;         (auth-sources '((:host "api.openai.com" :user "user" :secret "auth-token-123"))))
+;;     (fset 'oai-restapi--get-token-auth-source (lambda (service) "auth-token-123"))
+;;     (should (equal (oai-restapi--get-token 'openai) "auth-token-123"))
+;;     (fmakunbound 'oai-restapi--get-token-auth-source)))
+
+
 (ert-deftest oai-restapi--get-token-auth-source-test ()
   "Test when token is retrieved from auth-source."
-  (let ((oai-restapi-con-token "")
-        (auth-sources '((:host "api.openai.com" :user "user" :secret "auth-token-123"))))
-    (fset 'oai-restapi--get-token-auth-source (lambda (service) "auth-token-123"))
-    (should (equal (oai-restapi--get-token 'openai) "auth-token-123"))
-    (fmakunbound 'oai-restapi--get-token-auth-source)))
+  (let* ((oai-restapi-con-token "")
+         (auth-sources '((:host "api.openai.com" :user "user" :secret "auth-token-123")))
+         (orig-fn (symbol-function 'oai-restapi--get-token-auth-source)))
+    (unwind-protect
+        (progn
+          (fset 'oai-restapi--get-token-auth-source (lambda (service) "auth-token-123"))
+          (should (equal (oai-restapi--get-token 'openai) "auth-token-123")))
+      (fset 'oai-restapi--get-token-auth-source orig-fn))))
+
+;; (ert-deftest oai-restapi--get-token-no-valid-token-test ()
+;;   "Test when no valid token is provided."
+;;   (let ((oai-restapi-con-token "")
+;;         (auth-sources nil))
+;;     (fset 'oai-restapi--get-token-auth-source (lambda (service) nil))
+;;     (let ((err (cadr
+;;                 (should-error (oai-restapi--get-token :openai) :type 'error))))
+;;       ;; (print err)
+;;       (should (eql 0 (string-match "Please set" err))))
+
+;;     )
+;;     (fmakunbound 'oai-restapi--get-token-auth-source))
 
 (ert-deftest oai-restapi--get-token-no-valid-token-test ()
   "Test when no valid token is provided."
   (let ((oai-restapi-con-token "")
-        (auth-sources nil))
-    (fset 'oai-restapi--get-token-auth-source (lambda (service) nil))
-    (let ((err (cadr
-                (should-error (oai-restapi--get-token :openai) :type 'error))))
-      ;; (print err)
-      (should (eql 0 (string-match "Please set" err))))
-
-    )
-    (fmakunbound 'oai-restapi--get-token-auth-source))
-
+        (auth-sources nil)
+        (orig-fn (symbol-function 'oai-restapi--get-token-auth-source)))
+    (unwind-protect
+        (progn
+          (fset 'oai-restapi--get-token-auth-source (lambda (service) nil))
+          (let ((err (cadr
+                      (should-error (oai-restapi--get-token :openai) :type 'error))))
+            (should (eql 0 (string-match "Please set" err)))))
+      (fset 'oai-restapi--get-token-auth-source orig-fn))))
 ;;;
 ;;; - For `oai-restapi--get-token'
 ;; Dummy function for auth-source behavior
-(defun oai-restapi--get-token-auth-source (service) nil)
+;; (defun oai-restapi--get-token-auth-source (service) nil)
 
 (ert-deftest oai-restapi--get-token/string ()
   "Single string in `oai-restapi-con-token` returns value."
@@ -118,17 +148,41 @@ Stop it with `oai-restapi-stop-url-request'.
 ;;                   :type 'error)))
 
 
-;;; - oai-restapi--get-value-or-string
-(ert-deftest oai-restapi--get-value-or-string-test ()
+;;; - For `oai-restapi--get-headers'
+(ert-deftest oai-tests-oai-restapi--get-headers()
+  (let ((oai-restapi-con-token '(:local1
+                                 :github ("token1" "token2" "token3")
+                                 :some "vv"
+                                 :local2 nil)))
+
+(should (equal (oai-restapi--get-values oai-restapi-con-token "local1") '(nil)))
+(should (equal (oai-restapi--get-values oai-restapi-con-token "local2") '(nil)))
+(should (equal (oai-restapi--get-values-enhanced oai-restapi-con-token "local1") '(nil)))
+(should (equal (oai-restapi--get-values-enhanced oai-restapi-con-token "local2") '(nil)))
+(should (equal (oai-restapi--get-values-enhanced oai-restapi-con-token "github--0") '("token1")))
+(should (equal (oai-restapi--get-values-enhanced oai-restapi-con-token "github--1") '("token2")))
+(should (equal (oai-restapi--get-values-enhanced oai-restapi-con-token "github--3") nil))
+(should-error (oai-restapi--get-token "github--3")
+              :type 'user-error)
+(should (string-equal (oai-restapi--get-token "github--1") "token2"))
+(should (string-equal (oai-restapi--get-token :some) "vv"))
+(should (equal (oai-restapi--get-token :local1) nil))
+(should (equal (oai-restapi--get-headers "local2") '(("Content-Type" . "application/json"))))
+(should (equal (oai-restapi--get-headers "github--1") '(("Content-Type" . "application/json") ("Authorization" . "Bearer token2"))))
+(should-error (oai-restapi--get-headers "local3")
+              :type 'user-error)
+    ))
+;;; - oai-restapi--get-values
+(ert-deftest oai-tests--oai-restapi--get-values ()
   ;; Example variables
-  (defvar my-plist '(:foo "bar" :baz "qux"))
+  (defvar my-plist '(:foo "bar" :baz "qux" :bavv nil ))
   (defvar my-string "hello")
-  (defvar my-number 42)
 
   ;; Using oai-restapi--get-value-or-string
-  (should (equal (oai-restapi--get-value-or-string my-plist "foo") "bar"))
-  (should (equal (oai-restapi--get-value-or-string my-string "foo") "hello"))
-  (should (equal (oai-restapi--get-value-or-string my-number "foo")  nil))
+  (should (equal (oai-restapi--get-values my-plist "foo") '("bar")))
+  (should (equal (oai-restapi--get-values my-string "foo") '("hello")))
+  (should (equal (oai-restapi--get-values my-plist "foo1")  nil))
+  (should (equal (oai-restapi--get-values my-plist "bavv")  '(nil)))
 )
 ;;         (oai-block--set-variable
 
