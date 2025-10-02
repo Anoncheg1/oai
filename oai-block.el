@@ -58,7 +58,6 @@
 (require 'org)
 (require 'org-element)
 (require 'org-macs)
-(require 'oai-block-tags)
 
 (when (and (boundp 'org-protecting-blocks) (listp org-protecting-blocks))
   (add-to-list 'org-protecting-blocks "ai"))
@@ -204,7 +203,10 @@ If exist return nil or string, if not exist  return `default'."
 DEFINITIONS is a list of (VARIABLE &optional DEFAULT-FORM &key TYPE).
 TYPE can be 'number, 'bool, 'string, or 'identity (no conversion).
 Return one of:
-- nil symbol, if key/property not specified or explicit nil (after type processing).
+- t symbol, if value for key not specified, if specied, return string.
+- for number type, string-to-number used, that return 0 if number not
+  recognized.
+- for number if specified without value return t.
 - Processed value of parameter (e.g., t/nil for bool).
 Parameters are sourced from:
 1. From Oai block header `info' alist. (e.g., :model \"gpt-4\")
@@ -218,10 +220,10 @@ Parameters are sourced from:
                           (key (intern (concat ":" (symbol-name sym))))
                           (prop-name (symbol-name sym))
                           (postprocessor (cl-case type
-                                       (number `(cond ((null val) nil)
-                                                      ((and (stringp val) (string= val "nil")) nil)
-                                                      ((stringp val) (string-to-number val))
-                                                      ((numberp val) val)
+                                       (number `(cond ((null val) (print (list "wtf1" val)) nil)
+                                                      ((and (stringp val) (string= val "nil")) (print "wtf2") nil)
+                                                      ((stringp val) (print "wtf3") (string-to-number val))
+                                                      ((numberp val) (print "wtf4") val)
                                                       (t val)))
                                        (bool `(cond ((null val) nil)
                                                     ((eq val t) t)
@@ -358,7 +360,7 @@ line."
         (push-mark last-region-start t t)))
 
 (defun oai-mark-region-at-point ()
-  "Marks the prompt at point."
+  "Marks the prompt at point: [ME:], [AI:]."
   (interactive)
   (when-let* ((regions (oai-block--chat-role-regions))
               (start (cl-find-if (lambda (x) (>= (point) x)) (reverse regions)))
@@ -386,15 +388,18 @@ A negative argument ARG = -N means move backward."
     ;; (oai--debug "oai-forward-section1 %s %s" start end)
     (or arg (setq arg 1))
     (if (> arg 0)
-        (goto-char end)
+        (progn (push-mark nil t) ; save position
+               (goto-char end))
       ;; else - backward
       (let ((prev (cl-find-if (lambda (x) (>= (1- start) x)) (reverse regions))))
         ;; (oai--debug "oai-forward-section2 %s %s %s" (>= (point) start) prev start)
         (when  prev ;; (>= (point) start))
           (if (and (> (point) start) ; if at the middle of first section
                    (not prev))
-              (goto-char start)
+              (progn (push-mark nil t) ; save position
+                     (goto-char start))
             ;; else
+            (push-mark nil t) ; save position
             (goto-char (cl-find-if (lambda (x) (>= (1- start) x)) (reverse regions)))))))))
 
 (defun oai-kill-region-at-point (&optional arg)
@@ -482,7 +487,7 @@ TODO: EXEC-TIME."
       (org-with-wide-buffer
        (let* ((name (org-element-property :name context))
               (named-results (and name (org-babel-find-named-result name))))
-         (goto-char (or named-results (org-element-end context)))
+         (goto-char (or named-results (org-element-property :end context)))
          (print (list "name" name named-results))
          (cond
           ;; Existing results named after the current source.
@@ -497,7 +502,7 @@ TODO: EXEC-TIME."
           ((eq (point)
                (or (pcase (org-element-type (org-element-parent context))
                      ((or `section `org-data)
-                      (org-element-end (org-element-parent context)))
+                      (org-element-property :end (org-element-parent context)))
                      (_ (org-element-contents-end
                          (org-element-parent context))))
                    (point-max))))
@@ -523,7 +528,7 @@ TODO: EXEC-TIME."
       ;; after the previous element.
       (when insert
         (save-excursion
-          (goto-char (min (org-element-end context) (point-max)))
+          (goto-char (min (org-element-property :end context) (point-max)))
           (skip-chars-backward " \t\n")
           (forward-line)
           (unless (bolp) (insert "\n"))
@@ -601,125 +606,6 @@ rules in `font-lock-defaults' variable."
   "Insert ELEMENT at after position POS in LIST."
   (nconc (take (1+ pos) list) (list element) (nthcdr (1+ pos) list)))
 
-;;; -=-= Fontify Markdown blocks and Tags
-
-(defun oai-block--set-ai-keywords()
-  "Hook, that Insert our fontify functions in Org font lock keywords."
-  (setq org-font-lock-extra-keywords (oai-block--insert-after
-                                      org-font-lock-extra-keywords
-                                      (seq-position org-font-lock-extra-keywords '(org-fontify-meta-lines-and-blocks))
-                                      '(oai-block--font-lock-fontify-ai-subblocks)))
-  (setq org-font-lock-extra-keywords (oai-block--insert-after
-                                      org-font-lock-extra-keywords
-                                      (seq-position org-font-lock-extra-keywords '(org-fontify-meta-lines-and-blocks))
-                                      '(oai-block-tags--font-lock-fontify-links)))
-  )
-
-;;; -=-= Select markdown block
-
-(defun oai-block-markdown-mark-fenced-code-body-get-range (limit-begin limit-end)
-  "Returns (list begin end) of Mardown region, nil otherwise.
-Don't mark header/footer.
-LIMIT-BEGIN and LIMIT-END restrict the search region around point."
-  (let ((point-pos (point))
-        (start nil)
-        (end nil))
-    (save-excursion
-      ;; Find start fence
-      (when (re-search-backward oai-block--markdown-begin-re (or limit-begin (point-min)) t)
-        (setq start (match-end 0))
-        (goto-char point-pos)
-        ;; do we inside owr block?
-        (when (and (re-search-backward oai-block--markdown-end-re  (or limit-begin (point-min)) t)
-                   (> (match-beginning 0) start)
-                   (setq start nil))))
-      ;; Find end fence
-      (goto-char point-pos)
-      (when (and start
-                 (re-search-forward oai-block--markdown-end-re (or limit-end (point-max)) t))
-        (setq end (match-beginning 0))
-        (goto-char point-pos)
-        ;; do we inside owr block?
-        (when (and (re-search-forward oai-block--markdown-begin-re (or limit-end (point-max)) t)
-                   (< (match-end 0) end)
-                   (setq end nil)))))
-    ;; If point is inside fences, mark region
-    (if (and start end (> point-pos start) (< point-pos end))
-      (list start end))))
-
-
-(defun oai-block-markdown-mark-fenced-code-body (&optional limit-begin limit-end)
-  "Mark content inside Markdown fenced code block (```), excluding header/footer.
-LIMIT-BEGIN and LIMIT-END restrict the search region around point.
-Returns t if was marked, nil otherwise.
-Used in `oai-block-mark-md-block-body'."
-  ;; fill limit-begin and limit-end - if they was not profiled
-  (if (or (not limit-begin) (not limit-end))
-      (let ((element (oai-block-p)))
-        (setq limit-begin (org-element-property :contents-begin element))
-        (setq limit-end (org-element-property :contents-end element))))
-
-  (let* ((r (oai-block-markdown-mark-fenced-code-body-get-range limit-begin limit-end))
-         (beg (car r))
-         (end (cadr r)))
-    (set-mark beg)
-    (goto-char end)
-    (forward-line -1)
-    (end-of-line)
-    (activate-mark)))
-
-(defun oai-block-mark-src-block-body ()
-  "Mark Org blocks content around cursor.
-Excluding header and footer."
-  (interactive)
-  (let ((elem (org-element-at-point)))
-    (goto-char (org-element-property :begin elem))
-    (forward-line 1)
-    (set-mark (point))
-    (let ((case-fold-search t))
-          (re-search-forward "#\\+end_" nil t))
-    (beginning-of-line)
-    ;; (goto-char (org-element-property :end elem))
-    ;; (forward-line -2)
-    ;; (end-of-line)
-    (activate-mark)
-    t))
-
-;; like M-h but for C-c h
-
-(defun oai-block-mark-md-block-body ()
-  "Mark content of Markdown code block, or fallback to org-mark-element.
-Mark or select block content around cursor."
-  (interactive)
-  (cond
-   ;; 1) mardown in ai block & 2) ai block only
-   ((and (featurep 'oai-block)
-         (bound-and-true-p oai-mode)
-         (if-let*((element (oai-block-p))
-                  (content-start (org-element-property :contents-begin element))
-                  (content-end (org-element-property :contents-end element)))
-             ;; 1 mardown in ai block
-             (if (oai-block-markdown-mark-fenced-code-body content-start content-end)
-                 ;; then return t
-                 t
-               ;; else - 2 ai block only
-               (set-mark content-start)
-               (goto-char content-end)
-               (activate-mark)
-               t))))
-   ;; 1) mardown in Org blocks & 2) Org block only
-   ((let ((elem (org-element-at-point)))
-           (and (member (org-element-type elem) '(src-block example-block quote-block verse-block special-block comment-block))
-                (if (and (featurep 'oai-block)
-                         (oai-block-markdown-mark-fenced-code-body (org-element-property :begin elem) (org-element-property :end elem)))
-                    t
-                  ;; else
-                  (oai-block-mark-src-block-body)))))
-   ;; Markdown code block (``` fenced block)
-   ;; ((markdown-mark-fenced-code-body))
-   ;; Otherwise
-   (t
-    (org-mark-element))))
 
 ;;; provide
 (provide 'oai-block)

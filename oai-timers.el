@@ -57,11 +57,11 @@ Delay after which it will be killed."
 
 (defvar oai-timers--element-marker-variable-dict nil
   "Allow to store url buffer per block.
+Pairs of url-buffer (key) -> Header-marker (variable).
+So ai block may have several url-buffer running at the same time.
 Intented for usage with `oai-block--copy-header-marker' and keep pairs of
-;;old: ( block marker-> url-retrieve buffer).
 (url-retrieve buffero -> header marker).
 Should be used for interactive interrup of request only.
-We use pairs of (block-header-marker url-buffer)
 `eq' is good for buffers, for markers we should use `equal'")
 
 ;;; - variable-dict
@@ -69,8 +69,9 @@ We use pairs of (block-header-marker url-buffer)
   "Get variable for key.
 Get header-marker (variable) for url-buffer (key).
 Key is Indented for usage with `oai-block-get-header-marker'.
-Use ELEMENT only in current moment."
-    (alist-get key oai-timers--element-marker-variable-dict nil nil #'equal))
+Use ELEMENT only in current moment.
+We use `eq' to find key which is buffer."
+    (alist-get key oai-timers--element-marker-variable-dict nil nil #'eq))
 
 
 (defun oai-timers--get-keys-for-variable (variable)
@@ -88,7 +89,7 @@ use `oai-timers--element-marker-variable-dict'."
 ;; oai-timers--set-variable
 (defun oai-timers--set (key value)
   "Assign value to key.
-KEY is  url-buffer, VALUE is header marker.
+KEY: url-buffer, VALUE: header marker.
 Indented for usage with `oai-block-get-header-marker'."
     (if (eq value nil)
         (setf (alist-get key oai-timers--element-marker-variable-dict nil 'remove) nil)
@@ -104,9 +105,8 @@ We use `eq' here."
         (rassq-delete-all value oai-timers--element-marker-variable-dict)))
 
 (defun oai-timers--remove-key (key)
-  "Remove buffer."
+  "Remove buffer. Use `eq' to find key, for buffer eq is ok."
   (setq oai-timers--element-marker-variable-dict
-        ;; for buffer eq is ok
         (assq-delete-all key oai-timers--element-marker-variable-dict)))
 
 ;; (setq oai-timers--element-marker-variable-dict nil)

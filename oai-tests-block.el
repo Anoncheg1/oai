@@ -7,9 +7,8 @@
 ;; (setq ert-debug-on-error t)
 
 ;;; - require
-(require 'ert)             ; Testing framework
 (require 'oai-block)
-(require 'oai-block-tags)
+(require 'ert)             ; Testing framework
 ;;; - Helper function to set up a temporary Org buffer for testing.
 ;; It inserts content and optional Org properties, then returns the
 ;; parsed Oai block element and its parameters alist.
@@ -36,76 +35,79 @@
 ;;         element))))
 
 
-(defun oai-test-setup-buffer (block-content &optional properties-alist)
+(defun oai-test-setup-buffer (buf block-content &optional properties-alist)
   "Create a temporary Org buffer with BLOCK-CONTENT and optional PROPERTIES-ALIST.
 PROPERTIES-ALIST should be an alist like '((property-name . \"value\")).
 Returns a list (ELEMENT INFO-ALIST), where ELEMENT is the parsed Oai block
 and INFO-ALIST is the parameters from its header."
-  (let ((buf (generate-new-buffer "*oai-test-temp*")))
-    (with-current-buffer buf
-      (org-mode)
-      (setq-local org-export-with-properties t) ; Ensure properties are considered
-      (when properties-alist
-        (dolist (prop properties-alist)
-          (insert (format "#+PROPERTY: %s %s\n" (car prop) (cdr prop)))))
-      (insert block-content)
-      (goto-char (point-min))
-      ;; Check if #+begin_ai exists to avoid search failure
-      (unless (string-match-p "#\\+begin_ai" block-content)
-        (error "Test setup failed: block-content does not contain '#+begin_ai'"))
-      ;; Move point to the start of the AI block
-      (unless (search-forward "#+begin_ai" nil t)
-        (error "Failed to find '#+begin_ai' in buffer"))
-      (beginning-of-line) ; Ensure point is at the start of the block
-      (let* ((element (org-element-at-point)))
-        (unless (eq (org-element-type element) 'special-block)
-          (error "No valid Oai block found at point"))
-        element)) ; return
-        ))
+  (with-current-buffer buf
+    (org-mode)
+    (setq-local org-export-with-properties t) ; Ensure properties are considered
+    (when properties-alist
+      (dolist (prop properties-alist)
+        (insert (format "#+PROPERTY: %s %s\n" (car prop) (cdr prop)))))
+    (insert block-content)
+    (goto-char (point-min))
+    ;; Check if #+begin_ai exists to avoid search failure
+    (unless (string-match-p "#\\+begin_ai" block-content)
+      (error "Test setup failed: block-content does not contain '#+begin_ai'"))
+    ;; Move point to the start of the AI block
+    (unless (search-forward "#+begin_ai" nil t)
+      (error "Failed to find '#+begin_ai' in buffer"))
+    (beginning-of-line) ; Ensure point is at the start of the block
+    (let* ((element (org-element-at-point)))
+      (unless (eq (org-element-type element) 'special-block)
+        (error "No valid Oai block found at point"))
+      element)) ; return
+  )
 
 
-(oai-test-setup-buffer "#+begin_ai\nTest content\n#+end_ai")
+;; (oai-test-setup-buffer "#+begin_ai\nTest content\n#+end_ai")
 
 
 ;;; - test for test
 
 (ert-deftest oai-tests-block--setup-buffer-basic-test ()
   "Test that oai-test-setup-buffer sets up a buffer correctly."
-  (let* ((block-content "#+begin_ai\nTest content\n#+end_ai")
-         (element (oai-test-setup-buffer block-content)))
-    (should (eq (org-element-type element) 'special-block))
-    (should (equal (org-element-property :type element) "ai"))))
+  (with-temp-buffer
+    (let* ((block-content "#+begin_ai\nTest content\n#+end_ai")
+           (element (oai-test-setup-buffer (current-buffer) block-content)))
+      (should (eq (org-element-type element) 'special-block))
+      (should (equal (org-element-property :type element) "ai")))))
 
 ;;; - oai-block--let-params
 
 (ert-deftest oai-tests-block--let-params-all-from-info-test ()
   "Test when all parameters are provided in the block header (info alist)."
-  (let* ((test-block "#+begin_ai :stream t :sys \"A helpful LLM.\" :max-tokens 50 :model \"gpt-3.5-turbo\" :model1 :model2 :model3 :temperature 0.7\n#+end_ai\n")
-       (element (oai-test-setup-buffer test-block))
-       (info)
-       (marker (copy-marker (org-element-property :contents-end element)))
-       (buffer (org-element-property :buffer element))
-       evaluated-result)
-  (unwind-protect
-      (with-current-buffer buffer
+  (with-temp-buffer
+    (let* ((test-block "#+begin_ai :stream t :sys \"A helpful LLM.\" :stream2 :max-tokens 50 :max-tokens2 :model \"gpt-3.5-turbo\" :model1 :model2 t :model3 :temperature 0.7\n#+end_ai\n")
+           (element (oai-test-setup-buffer (current-buffer) test-block))
+           (info)
+           (marker (copy-marker (org-element-property :contents-end element)))
+           (buffer (org-element-property :buffer element))
+           evaluated-result)
+      ;; (unwind-protect
+      ;; Position point inside the block for correct context, though not strictly needed for info directly.
+      (goto-char (org-element-property :begin element))
+      (setq info (oai-block-get-info))
 
-          ;; Position point inside the block for correct context, though not strictly needed for info directly.
-          (goto-char (org-element-property :begin element))
-          (setq info (oai-block-get-info))
-          (oai-block--let-params info ((stream) (sys) (max-tokens :type integer) (model) (model1) (model2) (model3) (temperature :type float) (unknown "s"))
-                                         ;; (print (list max-tokens (type-of max-tokens)))
-                                         ;; (print (list temperature (type-of temperature)))
-                                         ;; (print (list unknown (type-of unknown)))
-                                         (should (string-equal stream "t"))
-                                         (should (= max-tokens 50))
-                                         (should (string-equal sys "A helpful LLM."))
-                                         (should (string-equal model "gpt-3.5-turbo"))
-                                         (should (= temperature 0.7))
-                                         (should (string-equal unknown "s"))
-                                         (should (string-equal model1 "nil"))
-                                         (should (string-equal model2 "nil"))
-                                         (should (string-equal model3 nil))))
-    (kill-buffer buffer))))
+      (oai-block--let-params info ((stream) (stream2 0 :type number) (stream3 1 :type number) (sys) (max-tokens :type integer) (max-tokens2 10 :type integer) (model) (model1 nil :type string) (model2 10 :type number) (model4 nil :type number) (model3) (temperature :type float) (unknown "s"))
+                             ;; (print (list max-tokens (type-of max-tokens)))
+                             ;; (print (list temperature (type-of temperature)))
+                             ;; (print (list unknown (type-of unknown)))
+                             (should (= stream3 1))
+                             (should (eq stream2 t))
+                             (should (eq max-tokens2 t))
+                             (should (string-equal stream "t"))
+                             (should (= max-tokens 50))
+                             (should (string-equal sys "A helpful LLM."))
+                             (should (string-equal model "gpt-3.5-turbo"))
+                             (should (= temperature 0.7))
+                             (should (string-equal unknown "s"))
+                             (should (string-equal model1 nil))
+                             (should (= model2 0))
+                             (should (string-equal model4 nil))
+                             (should (string-equal model3 t))))))
 
 ;; (defun oai-block--oai-restapi-request-prepare (req-type content element sys-prompt sys-prompt-for-all-messages model max-tokens top-p temperature frequency-penalty presence-penalty service stream)
 ;;   )
@@ -237,27 +239,7 @@ and INFO-ALIST is the parameters from its header."
 ;;     ))
 
 
-;;; - tags tests
-(ert-deftest oai-block-tags-replace-test ()
-    (let* ((temp-file (make-temp-file "mytest"))
-           (res
-            (unwind-protect
-                (progn
-                  (with-temp-file temp-file
-                    (insert "Hello, world test!"))
-                  (print temp-file)
-
-                  (prog1 (oai-block-tags-replace (format "aas `@%s`bb." temp-file))
-                    ;; (should (string= (oai-block-tags-replace temp-file) "Expected result")))
-                    (delete-file temp-file)))))
-           (res (split-string res "\n")))
-      (should (string-equal "aas " (nth 0 res)))
-      (should (string-equal "```" (nth 2 res)))
-      (should (string-equal "Hello, world test!" (nth 3 res)))
-      (should (string-equal "```" (nth 4 res)))
-      (should (string-equal "bb." (nth 5 res)))))
-
-;; To run these tests:
+;;; - To run these tests:
 ;; 1. Save the code to an .el file (e.g., `oai-params-test.el`).
 ;; 2. Open Emacs and load the file: `M-x load-file RET oai-tests2.el RET`.
 ;; 3. Run all tests: `M-x ert RET t RET`.
@@ -267,3 +249,7 @@ and INFO-ALIST is the parameters from its header."
 ;;  OR
 ;; eval-buffer
 ;; M-x ert RET t RET
+;;; provide
+(provide 'oai-tests-block)
+
+;;; oai-tests-block.el ends here

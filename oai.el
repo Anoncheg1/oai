@@ -9,6 +9,7 @@
 ;; Version: 0.1,  Fork from orig. version: 0.5.6 (commit cc4a4eb778e4689573ebd2d472b8164f4477e8b8)
 ;; Created: 20 Aug 2025
 ;; Package-Requires: ((emacs "27.1") (compat "30.1"))
+;; Optional: org-links
 
 ;;; License
 
@@ -40,6 +41,7 @@
 ;; - Chat with a language model from within an org mode buffer.
 ;; - Call multiple requests from multiple block and buffers.
 ;; - See how many in progress now.
+;; - Use tags `@Backtrace` @Bt and Org links to insert target in query.
 ;;
 ;; For the Internet connection used built-in libs: url.el and url-http.el.
 ;;
@@ -244,6 +246,7 @@ Set `help-window-select' variable to get focus."
                (headers (if arg
                                 (oai-expand-block-deep)))
                )
+          (print "oai-expand-block 1")
           (if (called-interactively-p 'any)
               (let ((buf (get-buffer-create "*OAi Preview*")))
                 (with-help-window buf (with-current-buffer buf
@@ -254,7 +257,6 @@ Set `help-window-select' variable to get focus."
                 (switch-to-buffer buf))
             expanded))
       (user-error
-       (print "wtf")
        (funcall oai-restapi-show-error-function (error-message-string err)
                 (oai-block-get-header-marker element))))))
 
@@ -319,6 +321,18 @@ It's designed to \"do the right thing\":
     (setq oai-debug-buffer   "*debug-oai*")
     (message "Enable oai debugging")))
 
+;;; -=-= Fontify Markdown blocks and Tags - function for hook
+
+(defun oai-block--set-ai-keywords()
+  "Hook, that Insert our fontify functions in Org font lock keywords."
+  (setq org-font-lock-extra-keywords (oai-block--insert-after
+                                      org-font-lock-extra-keywords
+                                      (seq-position org-font-lock-extra-keywords '(org-fontify-meta-lines-and-blocks))
+                                      '(oai-block--font-lock-fontify-ai-subblocks)))
+  (setq org-font-lock-extra-keywords (oai-block--insert-after
+                                      org-font-lock-extra-keywords
+                                      (seq-position org-font-lock-extra-keywords '(org-fontify-meta-lines-and-blocks))
+                                      '(oai-block-tags--font-lock-fontify-links))))
 ;;; -=-= Minor mode
 
 (defvar oai-mode-map (make-sparse-keymap)
@@ -333,8 +347,9 @@ It's designed to \"do the right thing\":
   ;; (define-key map (kbd (string-join (list "C-c" " r"))) 'org-ai-talk-capture-in-org) ; org-ai-talk.el
   (define-key map (kbd "M-h")		#'oai-block-mark-md-block-body) ; oai-block.el
   (define-key map (kbd "C-c C-?")	#'oai-open-request-buffer) ; oai-restapi.el
-  (define-key map (kbd "C-c ?")	#'oai-expand-block)
-  )
+  (define-key map (kbd "C-c ?")	#'oai-expand-block))
+
+
 
 (define-minor-mode oai-mode
   "Minor mode for `org-mode' integration with the OpenAI API."
@@ -351,8 +366,7 @@ It's designed to \"do the right thing\":
     ;; else - off
     (remove-hook 'org-ctrl-c-ctrl-c-hook #'oai-ctrl-c-ctrl-c 'local)
     (advice-remove 'keyboard-quit #'oai-keyboard-quit)
-    (remove-hook 'org-font-lock-set-keywords-hook #'oai-block--set-ai-keywords)
-   ))
+    (remove-hook 'org-font-lock-set-keywords-hook #'oai-block--set-ai-keywords)))
 
 ;;;###autoload
 (defun oai-open-request-buffer ()

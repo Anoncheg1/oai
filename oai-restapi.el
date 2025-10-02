@@ -91,10 +91,10 @@
 (require 'cl-lib)
 (require 'gv)
 (require 'json)
+(require 'oai-debug)
 (require 'oai-block-tags)
 (require 'oai-block)
 (require 'oai-timers)
-(require 'oai-debug)
 (require 'oai-async1) ; for `oai-async1-plist-get'
 
 (defcustom oai-restapi-jump-to-end-of-block t
@@ -623,6 +623,7 @@ whether messages are provided."
 
 (defun oai-restapi--get-lenght-recommendation (max-tokens)
   "Recomendation to limit yourself.
+Useful for small max-tokens.
 - words = tokens * 0.75
 - tokens = words * 1.33333
 - token = 4 characters
@@ -755,7 +756,7 @@ FINAL wherer to finalize, also applied if no text provided."
       (if text
           (with-current-buffer buffer ; Where target ai block located.
             ;; set mark (point) to allow user "C-u C-SPC" command to easily select the generated text
-            (push-mark end-marker)
+            (push-mark end-marker t)
             (save-excursion
               ;; - go  to the end of previous line and open new one
               (goto-char pos)
@@ -912,6 +913,19 @@ FINAL wherer to finalize, also applied if no text provided."
                                 (push (make-oai-restapi--response :type 'role :payload role) result))
                               result))))))))
 
+(defun oai-restapi--remove-empty-lines-above-at-point ()
+  "Remove lines above."
+  (let ((start (point)))
+    (while (progn
+             (forward-line -1)
+             (looking-at-p "^[ \t]*$"))
+      ;; continue loop
+      )
+    (forward-line 1)
+    (when (/= (line-number-at-pos start) (line-number-at-pos (point)))
+      (delete-region (point) start))))
+
+
 (defun oai-restapi--insert-stream-response (end-marker &optional response insert-role)
   "Insert result to ai block for chat mode.
 When first chunk received we stop waiting timer for request.
@@ -926,128 +940,119 @@ Save variables:
 `oai-restapi--current-chat-role' in current buffer.
 Called within url-buffer."
 
-(oai--debug "oai-restapi--insert-stream-response")
-  ;; (if (not response)
-  ;;     (progn
-  ;;       (oai--debug "oai-restapi--insert-stream-response org-ai-reset-stream-state")
-  ;;       ;; (org-ai-reset-stream-state))
-    ; - else
-    (let ((normalized (oai-restapi--normalize-response response)) ; list of messages
-          (buffer (marker-buffer end-marker))
-          (first-resp oai-restapi--currently-chat-got-first-response)
-          (pos (or oai-restapi--current-insert-position-marker
-                   (marker-position end-marker)))
-          (c-inside-code-m oai-restapi--currently-inside-code-markers)
-          (c-chat-role oai-restapi--current-chat-role)
-          (url-buffer (current-buffer))
-          stop-flag)
-      ;; (oai--debug "oai-restapi--insert-stream-response" normalized)
-      (unwind-protect ; we need to save variables to url buffer
-          (with-current-buffer buffer ; target buffer with block
-            (save-excursion
-              ;; (when (not normalized)
-              ;;   (oai--debug "oai-restapi--insert-stream-response NO normalized!" response))
-              ;; - LOOP Per message
-              (cl-loop for response in normalized
-                       do (let ((type (oai-restapi--response-type response)))
-                            ;; (oai--debug "oai-restapi--insert-stream-response: %s %s %s" type end-marker oai-restapi--current-insert-position-marker)
-                            ;; - Type of message: error
-                            (when (eq type 'error)
-                              (error (oai-restapi--response-payload response)))
+  (oai--debug "oai-restapi--insert-stream-response")
+  (let ((normalized (oai-restapi--normalize-response response)) ; list of messages
+        (buffer (marker-buffer end-marker))
+        (first-resp oai-restapi--currently-chat-got-first-response)
+        (pos (or oai-restapi--current-insert-position-marker
+                 (marker-position end-marker)))
+        (c-inside-code-m oai-restapi--currently-inside-code-markers)
+        (c-chat-role oai-restapi--current-chat-role)
+        (url-buffer (current-buffer))
+        stop-flag)
+    ;; (oai--debug "oai-restapi--insert-stream-response" normalized)
+    (unwind-protect ; we need to save variables to url buffer
+        (with-current-buffer buffer ; target buffer with block
+          (save-excursion
+            ;; - LOOP Per message
+            (cl-loop for response in normalized
+                     do (let ((type (oai-restapi--response-type response)))
+                          ;; (oai--debug "oai-restapi--insert-stream-response: %s %s %s" type end-marker oai-restapi--current-insert-position-marker)
+                          ;; - Type of message: error
+                          (when (eq type 'error)
+                            (error (oai-restapi--response-payload response)))
 
-                            ;; - Make sure we have enough space at end of block, don't write on same line
-                            (goto-char pos)
-                            (when (string-suffix-p "#+end_ai" (buffer-substring-no-properties (point) (line-end-position)))
-                              (insert "\n")
-                              (backward-char))
+                          ;; - Always executed at begining of loop
+                          (goto-char pos)
+                          (when (string-suffix-p "#+end_ai" (buffer-substring-no-properties (point) (line-end-position)))
+                            (oai-restapi--remove-empty-lines-above-at-point)
+                            (setq pos (point))
+                            (insert "\n")
+                            (backward-char))
 
-                            ;; - Type of message
-                            (cl-case type
-                              (role (let ((role (oai-restapi--response-payload response)))
-                                      (when (not (string= role c-chat-role))
-                                        (goto-char pos)
-
-                                        (setq c-chat-role role)
-                                        (let ((role (and insert-role (oai-restapi--response-payload response))))
-                                          (cond
-                                           ((string= role "assistant_reason")
-                                            (insert "\n[AI_REASON]: "))
-                                           ((string= role "assistant")
-                                            (insert "\n[AI]: "))
-                                           ((string= role "user")
-                                            (insert "\n[ME]: "))
-                                           ((string= role "system")
-                                            (insert "\n[SYS]: ")))
-
-                                          (condition-case hook-error
-                                              (run-hook-with-args 'oai-restapi-after-chat-insertion-hook 'role role pos buffer)
-                                            (error
-                                             (message "Error during \"after-chat-insertion-hook\" for role: %s" hook-error)))
-
-                                          (setq pos (point))
-                                          ))))
-
-                              (text (let ((text (decode-coding-string (oai-restapi--response-payload response) 'utf-8)))
+                          ;; - Type of message
+                          (cl-case type
+                            (role (let ((role (oai-restapi--response-payload response)))
+                                    (when (not (string= role c-chat-role))
                                       (goto-char pos)
-                                      (when (or first-resp (not (string= (string-trim text) "")))
-                                        (when (and (not first-resp) (string-prefix-p "```" text))
-                                          ;; start markdown codeblock responses on their own line
-                                          (insert "\n"))
-                                        (when first-resp
-                                          ;; call stop waiting with url-buffer and progress reporter.
-                                          (oai--debug "oai-restapi--insert-stream-response first-resp")
-                                          (oai-timers--interrupt-current-request url-buffer)
-                                          )
-                                        ;; track if we are inside code markers
-                                        (setq c-inside-code-m (and (not c-inside-code-m) ; oai-restapi--currently-inside-code-markers
-                                                        (string-match-p "```" text)))
-                                        ;; (oai--debug response)
-                                        ;; (oai--debug text)
-                                        (insert text)
-                                        ;; - "auto-fill" if not in code block
-                                        (when (and oai-restapi-auto-fill (not c-inside-code-m))
-                                          (fill-paragraph))
+
+                                      (setq c-chat-role role)
+                                      (let ((role (and insert-role (oai-restapi--response-payload response))))
+                                        (cond
+                                         ((string= role "assistant_reason")
+                                          (insert "\n[AI_REASON]: "))
+                                         ((string= role "assistant")
+                                          (insert "\n[AI]: "))
+                                         ((string= role "user")
+                                          (insert "\n[ME]: "))
+                                         ((string= role "system")
+                                          (insert "\n[SYS]: ")))
 
                                         (condition-case hook-error
-                                            (run-hook-with-args 'oai-restapi-after-chat-insertion-hook 'text text pos buffer)
+                                            (run-hook-with-args 'oai-restapi-after-chat-insertion-hook 'role role pos buffer)
                                           (error
-                                           (message "Error during \"after-chat-insertion-hook\" for text: %s" hook-error)))
+                                           (message "Error during \"after-chat-insertion-hook\" for role: %s" hook-error)))
+
+                                        (setq pos (point))))))
+
+                            (text (let ((text (decode-coding-string (oai-restapi--response-payload response) 'utf-8)))
+                                    (goto-char pos)
+                                    (when (or first-resp (not (string= (string-trim text) "")))
+                                      (when (and (not first-resp) (string-prefix-p "```" text))
+                                        ;; start markdown codeblock responses on their own line
+                                        (insert "\n"))
+                                      (when first-resp
+                                        ;; call stop waiting with url-buffer and progress reporter.
+                                        (oai--debug "oai-restapi--insert-stream-response first-resp")
+                                        (oai-timers--interrupt-current-request url-buffer)
                                         )
-                                      (setq first-resp t)
-                                      (setq pos (point))
-                                      ))
+                                      ;; track if we are inside code markers
+                                      (setq c-inside-code-m (and (not c-inside-code-m) ; oai-restapi--currently-inside-code-markers
+                                                                 (string-match-p "```" text)))
+                                      ;; (oai--debug response)
+                                      ;; (oai--debug text)
+                                      (insert text)
+                                      ;; - "auto-fill" if not in code block
+                                      (when (and oai-restapi-auto-fill (not c-inside-code-m))
+                                        (fill-paragraph))
 
-                              (stop (progn
-                                      ;; (when pos
-                                      (goto-char pos)
+                                      (condition-case hook-error
+                                          (run-hook-with-args 'oai-restapi-after-chat-insertion-hook 'text text pos buffer)
+                                        (error
+                                         (message "Error during \"after-chat-insertion-hook\" for text: %s" hook-error))))
+                                    (setq first-resp t)
+                                    (setq pos (point))))
 
-                                      ;; (message "inserting user prompt: %" (string= c-chat-role "user"))
-                                      (let ((text "\n\n[ME]: "))
-                                        (if insert-role
-                                            (insert text)
-                                          ;; else
-                                          (setq text ""))
+                            (stop (progn
+                                    ;; (when pos
+                                    (goto-char pos)
 
-                                        (condition-case hook-error
-                                            (run-hook-with-args 'oai-restapi-after-chat-insertion-hook 'end text pos buffer)
-                                          (error
-                                           (message "Error during \"after-chat-insertion-hook\": %s" hook-error)))
-                                        (setq pos (point)))
+                                    ;; (message "inserting user prompt: %" (string= c-chat-role "user"))
+                                    (let ((text "\n\n[ME]: "))
+                                      (if insert-role
+                                          (insert text)
+                                        ;; else
+                                        (setq text ""))
 
-                                      (org-element-cache-reset)
-                                      (setq stop-flag t)
-                                      ))))))
-            ;; - without save-excursion - go to the end.
-            (when (and oai-restapi-jump-to-end-of-block
-                       stop-flag)
-              (goto-char pos)))
-        ;; - after buffer - UNWINDFORMS - save variables to url-buffer
-        (setq oai-restapi--current-insert-position-marker pos)
-        (setq oai-restapi--currently-inside-code-markers c-inside-code-m)
-        (setq oai-restapi--current-chat-role c-chat-role)
-        )
-      ;; - in let
-      normalized))
+                                      (condition-case hook-error
+                                          (run-hook-with-args 'oai-restapi-after-chat-insertion-hook 'end text pos buffer)
+                                        (error
+                                         (message "Error during \"after-chat-insertion-hook\": %s" hook-error)))
+                                      (setq pos (point)))
+
+                                    (org-element-cache-reset)
+                                    (setq stop-flag t)))))))
+          ;; - without save-excursion - go to the end.
+          (when (and oai-restapi-jump-to-end-of-block
+                     stop-flag)
+            (push-mark nil t) ; save position
+            (goto-char pos)))
+      ;; - after buffer - UNWINDFORMS - save variables to url-buffer
+      (setq oai-restapi--current-insert-position-marker pos)
+      (setq oai-restapi--currently-inside-code-markers c-inside-code-m)
+      (setq oai-restapi--current-chat-role c-chat-role))
+    ;; - in let
+    normalized))
 
 ;; org-ai-stream-request - old
 (cl-defun oai-restapi-request (service model callback &optional &key prompt messages max-tokens temperature top-p frequency-penalty presence-penalty stream)
