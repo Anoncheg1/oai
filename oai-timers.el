@@ -295,7 +295,10 @@ Called from
 (defun oai-timers--progress-reporter-run (interrupt-request-func &optional duration)
   "Start or update progress notification.
 1) Save pair (HEADER-MARKER->URL-BUFFER)
-2) INTERRUPT-REQUEST-FUNC - When timer expired kill all by calling for every buffer.
+
+2) INTERRUPT-REQUEST-FUNC - When timer expired kill all by calling for
+every buffer.
+
 Require that url-buffer was saved with oai-timers--set, to count them.
 
 Called from `oai-restapi-request'.

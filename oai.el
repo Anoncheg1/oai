@@ -309,7 +309,7 @@ It's designed to \"do the right thing\":
 
 ;;; -=-= M-x oai-toggle-debug
 ;;;###autoload
-(defun oai-toggle-debug (&optional element)
+(defun oai-toggle-debug ()
   "Enable/disable debug."
   (interactive)
   (if oai-debug-buffer
@@ -345,7 +345,7 @@ It's designed to \"do the right thing\":
   ;; (define-key map (kbd "C-c DEL") 'org-ai-kill-region-at-point) ; oai-block.el
   (define-key map (kbd "C-c <backspace>") #'oai-kill-region-at-point) ; oai-block.el
   ;; (define-key map (kbd (string-join (list "C-c" " r"))) 'org-ai-talk-capture-in-org) ; org-ai-talk.el
-  (define-key map (kbd "M-h")		#'oai-block-mark-md-block-body) ; oai-block.el
+  (define-key map (kbd "M-h")		#'oai-block-tags-mark-md-block-body) ; oai-block.el
   (define-key map (kbd "C-c C-?")	#'oai-open-request-buffer) ; oai-restapi.el
   (define-key map (kbd "C-c ?")	#'oai-expand-block))
 

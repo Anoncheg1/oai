@@ -1,4 +1,4 @@
-; -*- lexical-binding: t -*-
+;;; oai-tests-block.el --- test  -*- lexical-binding: t -*-
 ;; (eval-buffer) or (load-file "path/to/async-tests.el")
 ;; Running Tests: Load the test file and run:
 ;; (eval-buffer)
@@ -7,6 +7,10 @@
 ;; (setq ert-debug-on-error t)
 
 ;;; - require
+
+;;; Commentary:
+;;
+
 (require 'oai-block)
 (require 'ert)             ; Testing framework
 ;;; - Helper function to set up a temporary Org buffer for testing.
@@ -35,11 +39,14 @@
 ;;         element))))
 
 
+;;; Code:
+
 (defun oai-test-setup-buffer (buf block-content &optional properties-alist)
   "Create a temporary Org buffer with BLOCK-CONTENT and optional PROPERTIES-ALIST.
 PROPERTIES-ALIST should be an alist like '((property-name . \"value\")).
 Returns a list (ELEMENT INFO-ALIST), where ELEMENT is the parsed Oai block
-and INFO-ALIST is the parameters from its header."
+and INFO-ALIST is the parameters from its header.
+Argument BUF is buffer in which we insert block-contentn."
   (with-current-buffer buf
     (org-mode)
     (setq-local org-export-with-properties t) ; Ensure properties are considered
@@ -82,14 +89,10 @@ and INFO-ALIST is the parameters from its header."
   (with-temp-buffer
     (let* ((test-block "#+begin_ai :stream t :sys \"A helpful LLM.\" :stream2 :max-tokens 50 :max-tokens2 :model \"gpt-3.5-turbo\" :model1 :model2 t :model3 :temperature 0.7\n#+end_ai\n")
            (element (oai-test-setup-buffer (current-buffer) test-block))
-           (info)
-           (marker (copy-marker (org-element-property :contents-end element)))
-           (buffer (org-element-property :buffer element))
-           evaluated-result)
+           (info (progn (goto-char (org-element-property :begin element)) (oai-block-get-info))))
       ;; (unwind-protect
       ;; Position point inside the block for correct context, though not strictly needed for info directly.
-      (goto-char (org-element-property :begin element))
-      (setq info (oai-block-get-info))
+
 
       (oai-block--let-params info ((stream) (stream2 0 :type number) (stream3 1 :type number) (sys) (max-tokens :type integer) (max-tokens2 10 :type integer) (model) (model1 nil :type string) (model2 10 :type number) (model4 nil :type number) (model3) (temperature :type float) (unknown "s"))
                              ;; (print (list max-tokens (type-of max-tokens)))

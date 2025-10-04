@@ -109,8 +109,7 @@ text after"))
              (limit-end (point-max))
              (range (oai-block-tags--markdown-fenced-code-body-get-range
                      limit-begin limit-end)))
-        ;; (should
-        (equal range (list 22 39)))))
+        (should (equal range (list 22 39))))))
   )
 
 (ert-deftest oai-test-block-markdown-mark-fenced-code-body-get-range2 ()
@@ -201,23 +200,23 @@ asdas
 
         (set-buffer-modified-p nil))))
 
-(ert-deftest oai-block-tags--replace-org-links-num-num ()
-  (let ((kill-buffer-query-functions))
-    (with-temp-buffer
-      (org-mode)
-      (add-hook 'org-execute-file-search-functions #'org-links-additional-formats)
-      (setq buffer-file-name "/mock/org.org")
-      (insert "* headline\nasdas\n** sub-headline\n asd")
-      (let (target)
-        (setq target "11
+  (ert-deftest oai-block-tags--replace-org-links-num-num ()
+    (let ((kill-buffer-query-functions))
+      (with-temp-buffer
+        (org-mode)
+        (add-hook 'org-execute-file-search-functions #'org-links-additional-formats)
+        (setq buffer-file-name "/mock/org.org")
+        (insert "* headline\nasdas\n** sub-headline\n asd")
+        (let (target)
+          (setq target "11
 ```auto
 * headline
 asdas
 ```
 4444")
-      (should (string-equal (oai-block-tags-replace  "11[[file:/mock/org.org::1-2::* headline]]4444")
-                            target))
-      )
+          (should (string-equal (oai-block-tags-replace  "11[[file:/mock/org.org::1-2::* headline]]4444")
+                                target))
+          )
         (set-buffer-modified-p nil)))))
 
 ;; (ert-deftest oai-block-tags--replace-org-links-num-num ()
@@ -247,7 +246,7 @@ asdas
 (ert-deftest oai-block-tags-replace-test ()
     (let* ((temp-file (make-temp-file "mytest"))
            (res
-            (unwind-protect
+            ;; (unwind-protect
                 (progn
                   (with-temp-file temp-file
                     (insert "Hello, world test!"))
@@ -255,7 +254,7 @@ asdas
 
                   (prog1 (oai-block-tags-replace (format "aas `@%s`bb." temp-file))
                     ;; (should (string= (oai-block-tags-replace temp-file) "Expected result")))
-                    (delete-file temp-file)))))
+                    (delete-file temp-file))))
            (res (split-string res "\n")))
       (should (string-equal "aas " (nth 0 res)))
       (should (string-equal "```" (nth 2 res)))

@@ -1,3 +1,4 @@
+;; -*- lexical-binding: t -*-
 ;; - for org-element-at-point to work and oai-where-is-src-block-result
 ;; - breaks 'fill-paragraph
 (when (boundp 'org-element-greater-elements)

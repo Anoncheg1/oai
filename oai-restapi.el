@@ -151,10 +151,11 @@ or
 machine openai--0 password <your token>
 machine openai--1 password <your token>"
   :type '(choice (string :tag "String value")
-                 (plist :key-type symbol :value-type (choice (string :tag "Plist with symbol key and string value")
-                                                             (list :tag "Plist with symbol key and list of string values")))
+                 (plist :key-type symbol
+                        :value-type (choice (string :tag "token string")
+                                            (list :value-type string
+                                                  :tag "or list of token strings")))
                  (const :tag "Use auth-source." nil))
-  :type 'string
   :group 'oai)
 
 (defcustom oai-restapi-con-model '(:openai "gpt-4o-mini")
